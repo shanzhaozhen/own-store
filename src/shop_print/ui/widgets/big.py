@@ -136,7 +136,11 @@ class NumberStepper(QWidget):
 
 
 class ChoiceGroup(QWidget):
-    """多选一的大按钮组，代替下拉框（下拉框要点两次，还会遮住内容）。"""
+    """多选一的大按钮组，代替下拉框（下拉框要点两次，还会遮住内容）。
+
+    `vertical=True` 时一行一个：打印机名字长（"KONICA MINOLTA 225i PCL6"），
+    横着排三台就挤成一团、字还被截掉，竖着排反而看得清。
+    """
 
     changed = Signal(str)
 
@@ -145,14 +149,33 @@ class ChoiceGroup(QWidget):
         options: Iterable[tuple[str, str]],
         current: str = "",
         parent: QWidget | None = None,
+        vertical: bool = False,
     ) -> None:
         super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+        self._layout: QVBoxLayout | QHBoxLayout = (
+            QVBoxLayout(self) if vertical else QHBoxLayout(self)
+        )
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(10)
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons: dict[str, QPushButton] = {}
+        self._current = ""
+        self.set_options(options, current)
+
+    def set_options(self, options: Iterable[tuple[str, str]], current: str = "") -> None:
+        """换掉全部选项。打印机列表会变（插拔、改设置），所以要能重建。
+
+        `setParent(None)` 那一步不能省：只 `deleteLater()` 的话旧按钮在真正被
+        删掉之前还留在屏幕上，新旧按钮叠在一起，看着就是"按钮变形/残影"。
+        """
+        for button in self._buttons.values():
+            self._group.removeButton(button)
+            self._layout.removeWidget(button)
+            button.hide()
+            button.setParent(None)
+            button.deleteLater()
+        self._buttons.clear()
 
         for key, label in options:
             button = QPushButton(label)
@@ -162,7 +185,7 @@ class ChoiceGroup(QWidget):
             button.clicked.connect(lambda _=False, k=key: self._on_pick(k))
             self._group.addButton(button)
             self._buttons[key] = button
-            layout.addWidget(button)
+            self._layout.addWidget(button)
 
         if current in self._buttons:
             self._buttons[current].setChecked(True)
@@ -186,6 +209,12 @@ class ChoiceGroup(QWidget):
         if button is not None:
             button.setEnabled(enabled)
             button.setToolTip(reason)
+
+    def set_tooltip(self, key: str, text: str) -> None:
+        """按钮上的字截短了（打印机名字很长），全名放这里。"""
+        button = self._buttons.get(key)
+        if button is not None:
+            button.setToolTip(text)
 
     def _on_pick(self, key: str) -> None:
         if key != self._current:

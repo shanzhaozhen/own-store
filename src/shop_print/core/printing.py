@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -343,6 +344,26 @@ def _draw_fitted(dc, image: Image.Image, printable_w: int, printable_h: int) -> 
     dib.draw(dc.GetHandleOutput(), (left, top, left + width, top + height))
 
 
+def _actual_size_rect(
+    page_rect, device_landscape: bool, device: _DeviceMetrics
+) -> tuple[int, int, int, int]:
+    """按实物尺寸画时，页面应该落在 DC 的哪个矩形里。
+
+    关键是坐标原点：打印机 DC 的 (0,0) 在**可打印区**左上角，而它距离纸张
+    左上角有 PHYSICALOFFSET 那么远。所以要把页面画在 (-offset) 处，
+    页面的 1mm 才正好落在纸的 1mm 上。超出可打印区的部分由驱动裁掉 ——
+    证件排版留了 6mm 安全边，正常不会裁到内容。
+
+    单独抽出来是为了**打印预览能用同一套算式**：预览画的必须和真打出来的一样。
+    """
+    width_pt, height_pt = float(page_rect.width), float(page_rect.height)
+    if (width_pt > height_pt) != device_landscape:
+        width_pt, height_pt = height_pt, width_pt  # 渲染时转过 90°，物理宽高也跟着换
+    width = max(1, round(width_pt / 72.0 * device.dpi_x))
+    height = max(1, round(height_pt / 72.0 * device.dpi_y))
+    return (-device.offset_x, -device.offset_y, width, height)
+
+
 def _draw_actual_size(
     dc,
     image: Image.Image,
@@ -350,24 +371,12 @@ def _draw_actual_size(
     device_landscape: bool,
     device: _DeviceMetrics,
 ) -> None:
-    """按 PDF 页面的**物理尺寸** 1:1 画。证件复印走这条。
-
-    关键是坐标原点：打印机 DC 的 (0,0) 在**可打印区**左上角，而它距离纸张
-    左上角有 PHYSICALOFFSET 那么远。所以要把页面画在 (-offset) 处，
-    页面的 1mm 才正好落在纸的 1mm 上。超出可打印区的部分由驱动裁掉 ——
-    证件排版留了 6mm 安全边，正常不会裁到内容。
-    """
-    width_pt, height_pt = float(page_rect.width), float(page_rect.height)
-    if (width_pt > height_pt) != device_landscape:
-        width_pt, height_pt = height_pt, width_pt  # 渲染时转过 90°，物理宽高也跟着换
-    width = max(1, round(width_pt / 72.0 * device.dpi_x))
-    height = max(1, round(height_pt / 72.0 * device.dpi_y))
-
-    超出 = (
-        width - device.offset_x > device.printable_w + device.offset_x
-        or height - device.offset_y > device.printable_h + device.offset_y
-    )
-    if 超出:
+    """按 PDF 页面的物理尺寸 1:1 画。证件复印走这条。"""
+    left, top, width, height = _actual_size_rect(page_rect, device_landscape, device)
+    if (
+        width > device.printable_w + 2 * device.offset_x
+        or height > device.printable_h + 2 * device.offset_y
+    ):
         logger.warning(
             "按实物尺寸打印时页面比纸大（页面 %d×%d px，可打印区 %d×%d px），边缘会被裁掉",
             width,
@@ -375,5 +384,161 @@ def _draw_actual_size(
             device.printable_w,
             device.printable_h,
         )
-    left, top = -device.offset_x, -device.offset_y
     ImageWin.Dib(image).draw(dc.GetHandleOutput(), (left, top, left + width, top + height))
+
+
+# ── 打印预览：画出"纸上会是什么样" ───────────────────────────────
+@dataclass
+class PaperMetrics:
+    """一台打印机在某种纸上的物理量，单位毫米。预览和"会不会裁掉边"都靠它。"""
+
+    paper_w_mm: float
+    paper_h_mm: float
+    printable_w_mm: float
+    printable_h_mm: float
+    offset_x_mm: float
+    offset_y_mm: float
+    measured: bool = True  # False = 问不出来，按整张纸都能打算的
+
+    @property
+    def margin_note(self) -> str:
+        if not self.measured:
+            return "打印机的页边距问不出来，预览按整张纸都能打算"
+        edge = max(self.offset_x_mm, self.offset_y_mm)
+        if edge < 0.1:
+            return "这台打印机四周没有打不到的边"
+        return f"打印机四周约 {edge:.0f}mm 打不到（虚线以外）"
+
+
+def paper_metrics(printer: str = "", paper: str = "A4", landscape: bool = False) -> PaperMetrics:
+    """问打印机：纸多大、能打的区域多大、可打印区离纸边多远。
+
+    问不出来（没装驱动、驱动抽风）时按"整张纸都能打"返回，并把 measured 标成
+    False —— 预览宁可乐观一点，也不要因为拿不到边距就不给预览。
+    """
+    from . import convert
+
+    width_pt, height_pt = convert.PAPER_SIZES.get(paper, convert.PAPER_SIZES["A4"])
+    if landscape:
+        width_pt, height_pt = height_pt, width_pt
+    fallback = PaperMetrics(
+        paper_w_mm=width_pt / (72.0 / 25.4),
+        paper_h_mm=height_pt / (72.0 / 25.4),
+        printable_w_mm=width_pt / (72.0 / 25.4),
+        printable_h_mm=height_pt / (72.0 / 25.4),
+        offset_x_mm=0.0,
+        offset_y_mm=0.0,
+        measured=False,
+    )
+    if not _WIN32_READY:
+        return fallback
+    try:
+        name = _resolve_printer(printer)
+        devmode = _build_devmode(name, PrintSettings(paper=paper), landscape)
+        hdc = win32gui.CreateDC("WINSPOOL", name, devmode)
+        dc = win32ui.CreateDCFromHandle(hdc)
+        try:
+            dpi_x = dc.GetDeviceCaps(win32con.LOGPIXELSX) or 300
+            dpi_y = dc.GetDeviceCaps(win32con.LOGPIXELSY) or 300
+            paper_w = dc.GetDeviceCaps(win32con.PHYSICALWIDTH)
+            paper_h = dc.GetDeviceCaps(win32con.PHYSICALHEIGHT)
+            return PaperMetrics(
+                paper_w_mm=paper_w / dpi_x * 25.4,
+                paper_h_mm=paper_h / dpi_y * 25.4,
+                printable_w_mm=dc.GetDeviceCaps(win32con.HORZRES) / dpi_x * 25.4,
+                printable_h_mm=dc.GetDeviceCaps(win32con.VERTRES) / dpi_y * 25.4,
+                offset_x_mm=dc.GetDeviceCaps(win32con.PHYSICALOFFSETX) / dpi_x * 25.4,
+                offset_y_mm=dc.GetDeviceCaps(win32con.PHYSICALOFFSETY) / dpi_y * 25.4,
+            )
+        finally:
+            dc.DeleteDC()
+    except Exception:
+        logger.warning("问不出打印机「%s」的纸张尺寸，预览按整张纸算", printer, exc_info=True)
+        return fallback
+
+
+def preview_sheet(
+    pdf_path: str | Path,
+    index: int = 0,
+    settings: PrintSettings | None = None,
+    dpi: int = 110,
+    metrics: PaperMetrics | None = None,
+) -> bytes:
+    """画出这一页**在纸上**会是什么样，返回 PNG 字节。
+
+    和预览 PDF 页面不是一回事：这里画的是整张纸 —— 纸多大、内容摆在哪、
+    有没有被缩、四周打不到的边在哪（虚线）。长辈看这一张就知道打出来什么样。
+
+    刻意和真打印共用同一套摆放算式（`_actual_size_rect` / 等比居中），
+    否则预览是"另一套逻辑画出来的好看图"，反而误导人。
+
+    core 不许 import Qt，所以返回 PNG 字节而不是 QPixmap。
+    """
+    conf = settings or PrintSettings()
+    with convert.open_pdf(pdf_path) as doc:
+        index = max(0, min(index, doc.page_count - 1))
+        page_rect = doc[index].rect
+        device_landscape = page_rect.width > page_rect.height
+        info = metrics or paper_metrics(conf.printer, conf.paper, device_landscape)
+        # 纸和内容都按同一个 dpi 画
+        px_per_mm = dpi / 25.4
+        sheet_w = max(1, round(info.paper_w_mm * px_per_mm))
+        sheet_h = max(1, round(info.paper_h_mm * px_per_mm))
+        content = _render_for_device(doc, index, dpi, device_landscape)
+
+    sheet = Image.new("L", (sheet_w, sheet_h), 255)
+    printable_w = max(1, round(info.printable_w_mm * px_per_mm))
+    printable_h = max(1, round(info.printable_h_mm * px_per_mm))
+    offset_x = round(info.offset_x_mm * px_per_mm)
+    offset_y = round(info.offset_y_mm * px_per_mm)
+
+    if conf.actual_size:
+        device = _DeviceMetrics(
+            dpi_x=dpi,
+            dpi_y=dpi,
+            offset_x=offset_x,
+            offset_y=offset_y,
+            printable_w=printable_w,
+            printable_h=printable_h,
+        )
+        left, top, width, height = _actual_size_rect(page_rect, device_landscape, device)
+        left += offset_x  # DC 坐标 → 纸面坐标
+        top += offset_y
+    else:
+        scale = min(printable_w / content.width, printable_h / content.height)
+        width = max(1, int(content.width * scale))
+        height = max(1, int(content.height * scale))
+        left = offset_x + (printable_w - width) // 2
+        top = offset_y + (printable_h - height) // 2
+
+    sheet.paste(content.resize((width, height), Image.LANCZOS), (left, top))
+    return _decorate_sheet(sheet, offset_x, offset_y, printable_w, printable_h, info.measured)
+
+
+def _decorate_sheet(
+    sheet: Image.Image,
+    offset_x: int,
+    offset_y: int,
+    printable_w: int,
+    printable_h: int,
+    measured: bool,
+) -> bytes:
+    """给预览加纸边和可打印区虚线，然后编码成 PNG。"""
+    from PIL import ImageDraw
+
+    canvas = sheet.convert("L")
+    draw = ImageDraw.Draw(canvas)
+    draw.rectangle([0, 0, canvas.width - 1, canvas.height - 1], outline=150)  # 纸边
+    if measured and (offset_x > 0 or offset_y > 0):
+        right = min(canvas.width - 1, offset_x + printable_w)
+        bottom = min(canvas.height - 1, offset_y + printable_h)
+        step = max(4, canvas.width // 90)
+        for x in range(offset_x, right, step * 2):  # 手画虚线：PIL 没有虚线
+            draw.line([x, offset_y, min(x + step, right), offset_y], fill=190)
+            draw.line([x, bottom, min(x + step, right), bottom], fill=190)
+        for y in range(offset_y, bottom, step * 2):
+            draw.line([offset_x, y, offset_x, min(y + step, bottom)], fill=190)
+            draw.line([right, y, right, min(y + step, bottom)], fill=190)
+    buffer = io.BytesIO()
+    canvas.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()

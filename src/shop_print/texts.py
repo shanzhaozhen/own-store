@@ -41,13 +41,15 @@ BTN_RETRY = "再试一次"
 BTN_CANCEL = "取消"
 
 # ── 打印页 ────────────────────────────────────────────────────────
+PRINT_TITLE = "打印预览"
 LABEL_COPIES = "打几份"
 LABEL_SIDES = "单面还是双面"
 SIDES_SINGLE = "单面"
 SIDES_DOUBLE = "双面"
 LABEL_PAPER = "纸张"
 LABEL_COLOR_DISABLED = "本店打印机只有黑白"
-LABEL_PRINTER = "打印机"
+LABEL_PRINTER = "用哪台打印机"
+PRINTER_NONE = "（还没找到打印机）"
 PRINT_ACTUAL_SIZE = "这一张按证件的实际大小打，不缩放"
 
 # ── 照片增强页 ────────────────────────────────────────────────────

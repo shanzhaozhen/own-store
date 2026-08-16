@@ -42,6 +42,7 @@ class OcrConfig:
     cloud_provider: str = ""  # 空 = 云端高精度未配置，界面上按钮置灰
     cloud_api_key: str = ""
     cloud_endpoint: str = ""
+    last_save_dir: str = ""  # 上次「另存为」选的文件夹，下次默认还开这里
 
 
 @dataclass

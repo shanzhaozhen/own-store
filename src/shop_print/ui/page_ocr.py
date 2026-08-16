@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -151,30 +152,54 @@ class OcrPage(SubPage):
 
     # ── 保存 ────────────────────────────────────────────────────
     def _save(self) -> None:
+        """另存为：让长辈自己选存哪儿（默认在"我的文档"），文件名默认用原图名。
+
+        原来是悄悄存到 %LOCALAPPDATA% 下面的 output 目录 —— 那个路径长辈根本
+        找不到，只能靠「打开文件夹」按钮。改成标准的另存为对话框更直观。
+        """
         if self._source is None or self._result is None:
             return
+        默认目录 = self._config.ocr.last_save_dir or str(Path.home() / "Documents")
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "另存为 Word 文档",
+            str(Path(默认目录) / f"{self._source.stem}.docx"),
+            "Word 文档 (*.docx)",
+        )
+        if not target:
+            return
+        目标 = Path(target)
+        self._config.ocr.last_save_dir = str(目标.parent)
+
         edited = self._editor.toPlainText()
         result = (
             self._result
             if edited.strip() == self._original_text.strip()
             else _rebuild_result(edited, self._result)
         )
+        改过了 = result is not self._result
         self._save_button.setEnabled(False)
         self.show_busy("正在生成 Word…")
         run_async(
             self._do_save,
             result,
-            self._source,
+            目标,
+            改过了,
             on_done=self._on_saved,
             on_failed=self._on_save_failed,
         )
 
     @staticmethod
-    def _do_save(result: ocr.OcrResult, source: Path) -> Path:
-        target_dir = paths.output_dir()
-        target_dir.mkdir(parents=True, exist_ok=True)
-        docx_path = ocr.to_docx(result, target_dir / f"{source.stem}.docx")
-        ocr.to_txt(result, target_dir / f"{source.stem}.txt")
+    def _do_save(result: ocr.OcrResult, target: Path, 改过了: bool) -> Path:
+        """默认生成**保留原有排版**的 Word（文字在文本框里，位置照着原图）。
+
+        用户在界面上改过文字之后，坐标就不可信了（重建出来的段落是按行堆的），
+        这时候退回顺排的普通段落 —— 保排版的前提是坐标还对得上。
+        """
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # 改过文字 → 顺排；没改过 → 保留原有排版（文字放在按原位置摆的文本框里）
+        docx_path = ocr.to_docx(result, target) if 改过了 else ocr.to_docx_layout(result, target)
+        ocr.to_txt(result, target.with_suffix(".txt"))
         return docx_path
 
     def _on_saved(self, docx_path: Path) -> None:

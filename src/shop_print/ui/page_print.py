@@ -1,7 +1,9 @@
-"""打印文档页：选文件 → 预览 → 开始打印。
+"""打印预览页：看清纸上是什么样 → 选打印机和份数 → 开始打印。
 
-一切文件先归一化成 PDF 再预览再打印，所以顾客看到的预览和打出来的纸
-一定是同一份数据。见 docs/02-架构与分层.md。
+预览画的是**整张纸**（纸多大、内容摆在哪、有没有被缩、四周打不到的边在哪），
+和真打印共用同一套摆放算式（`core/printing.preview_sheet`）——
+预览要是"另一套逻辑画出来的好看图"，那就是在骗人。
+一切文件先归一化成 PDF 再预览再打印，见 docs/02-架构与分层.md。
 """
 
 from __future__ import annotations
@@ -22,10 +24,17 @@ from .workers import run_async
 
 logger = logging.getLogger(__name__)
 
+# 打印机名字可能很长（"KONICA MINOLTA 225i PCL6"），按钮上截短，全名放 tooltip
+_NAME_MAX = 22
+
+
+def _short(name: str) -> str:
+    return name if len(name) <= _NAME_MAX else name[: _NAME_MAX - 1] + "…"
+
 
 class PrintPage(SubPage):
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
-        super().__init__(texts.HOME_CARD_PRINT_TITLE, parent)
+        super().__init__(texts.PRINT_TITLE, parent)
         self._config = config
         self._sources: list[Path] = []
         self._enhance: EnhanceOptions | None = None
@@ -33,12 +42,16 @@ class PrintPage(SubPage):
         self._pdf: Path | None = None
         self._pages = 0
 
-        self._preview = PagedPreview("选好文件之后这里会显示打印效果")
+        self._preview = PagedPreview("选好文件之后这里显示打印出来的样子")
         self._preview.pageRequested.connect(self._render_page)
 
         self._file_label = QLabel("")
         self._file_label.setProperty("role", "section")
         self._file_label.setWordWrap(True)
+
+        # 打印机竖着排：名字长，横排三台就挤成一团、字还会被截掉
+        self._printers = ChoiceGroup([("", texts.PRINTER_NONE)], "", vertical=True)
+        self._printers.changed.connect(self._on_printer_changed)
 
         self._copies = NumberStepper(1, 99, config.printing.copies)
         self._sides = ChoiceGroup(
@@ -46,9 +59,11 @@ class PrintPage(SubPage):
             "double" if config.printing.duplex else "single",
         )
         self._paper = ChoiceGroup([("A4", "A4"), ("A3", "A3")], config.printing.paper)
+        self._paper.changed.connect(lambda _: self._refresh_preview())
 
-        self._printer_label = QLabel("")
-        self._printer_label.setProperty("role", "hint")
+        self._margin_hint = QLabel("")
+        self._margin_hint.setProperty("role", "hint")
+        self._margin_hint.setWordWrap(True)
         self._color_hint = QLabel(texts.LABEL_COLOR_DISABLED)
         self._color_hint.setProperty("role", "hint")
         # 只有证件二合一那条路会显示：告诉长辈这一张是按实物尺寸打的
@@ -62,13 +77,14 @@ class PrintPage(SubPage):
         self._print_button.clicked.connect(self._start_print)
 
         controls = QVBoxLayout()
-        controls.setSpacing(16)
+        controls.setSpacing(14)
         controls.addWidget(self._file_label)
+        controls.addLayout(self._row(texts.LABEL_PRINTER, self._printers))
         controls.addLayout(self._row(texts.LABEL_COPIES, self._copies))
         controls.addLayout(self._row(texts.LABEL_SIDES, self._sides))
         controls.addLayout(self._row(texts.LABEL_PAPER, self._paper))
-        controls.addWidget(self._printer_label)
         controls.addWidget(self._color_hint)
+        controls.addWidget(self._margin_hint)
         controls.addWidget(self._size_hint)
         controls.addStretch(1)
 
@@ -79,7 +95,7 @@ class PrintPage(SubPage):
 
         self.body.addLayout(middle, stretch=1)
         self.body.addWidget(self._print_button)
-        self._refresh_printer_label()
+        self.reload_printers()
 
     @staticmethod
     def _row(label_text: str, widget: QWidget) -> QHBoxLayout:
@@ -93,13 +109,48 @@ class PrintPage(SubPage):
         row.addStretch(1)
         return row
 
-    def _refresh_printer_label(self) -> None:
+    # ── 打印机 ──────────────────────────────────────────────────
+    def reload_printers(self) -> None:
+        """重新列打印机。设置里改过、或者插拔了打印机之后调。
+
+        直接列在这一页上，不藏进设置里：店里可能同时有柯美和虚拟打印机，
+        长辈要能自己选，而且**得看得见现在要往哪台机器打**。
+        """
         try:
-            name = self._config.printing.printer or printing.default_printer()
+            printers = printing.list_printers()
         except Exception:
-            name = ""
-        self._printer_label.setText(
-            f"{texts.LABEL_PRINTER}：{name}" if name else "还没有找到打印机"
+            logger.warning("列打印机失败", exc_info=True)
+            printers = []
+
+        if not printers:
+            self._printers.set_options([("", texts.PRINTER_NONE)], "")
+            self._printers.setEnabled(False)
+            self._margin_hint.setText("")
+            return
+
+        options = [(p.name, _short(p.name) + ("（离线）" if p.offline else "")) for p in printers]
+        记住的 = self._config.printing.printer
+        当前 = 记住的 if any(p.name == 记住的 for p in printers) else printers[0].name
+        self._printers.set_options(options, 当前)
+        self._printers.setEnabled(True)
+        for p in printers:
+            self._printers.set_tooltip(p.name, p.name)
+        self._config.printing.printer = 当前
+        self._refresh_preview()
+
+    def _on_printer_changed(self, name: str) -> None:
+        self._config.printing.printer = name
+        self._refresh_preview()
+
+    def _current_settings(self, job_name: str = "打印助手") -> printing.PrintSettings:
+        return printing.PrintSettings(
+            printer=self._printers.current(),
+            copies=self._copies.value(),
+            duplex=self._sides.current() == "double",
+            paper=self._paper.current(),
+            dpi=self._config.printing.dpi,
+            actual_size=self._actual_size,
+            job_name=job_name,
         )
 
     # ── 外部入口 ────────────────────────────────────────────────
@@ -124,7 +175,7 @@ class PrintPage(SubPage):
         self._pages = 0
         self._print_button.setEnabled(False)
         self._preview.set_total(0)
-        self._refresh_printer_label()
+        self.reload_printers()
         self._size_hint.setVisible(actual_size)
 
         if not self._sources:
@@ -157,32 +208,49 @@ class PrintPage(SubPage):
         self._pdf, self._pages = result
         self.clear_status()
         self._print_button.setEnabled(True)
-        self._preview.set_total(self._pages)
+        self._preview.set_total(self._pages)  # 会回调 _render_page(0)
+
+    def _refresh_preview(self) -> None:
+        """换了打印机 / 纸张之后重画预览 —— 页边距和缩放都可能跟着变。"""
+        if self._pdf is not None:
+            self._render_page(self._preview.current_index())
 
     def _render_page(self, index: int) -> None:
+        """画"这一页在纸上是什么样"。纸边、可打印区虚线、内容位置都按真打印算。"""
         if self._pdf is None:
             return
         run_async(
-            convert.render_page_png,
+            printing.preview_sheet,
             self._pdf,
             index,
-            on_done=self._preview.view.set_png,
+            self._current_settings(),
+            on_done=self._on_preview_ready,
             on_failed=self.show_error,
         )
+        run_async(
+            printing.paper_metrics,
+            self._printers.current(),
+            self._paper.current(),
+            on_done=self._on_metrics_ready,
+            on_failed=lambda _msg: None,  # 拿不到就不显示这行提示，不用打扰长辈
+        )
+
+    def _on_preview_ready(self, png: bytes) -> None:
+        self._preview.view.set_png(png)
+
+    def _on_metrics_ready(self, metrics: printing.PaperMetrics) -> None:
+        self._margin_hint.setText(metrics.margin_note)
 
     # ── 打印 ────────────────────────────────────────────────────
     def _start_print(self) -> None:
         if self._pdf is None:
             return
+        if not self._printers.current():
+            self.show_error(texts.friendly_error(texts.ErrorKind.PRINTER_NOT_FOUND))
+            return
         self._print_button.setEnabled(False)
-        settings = printing.PrintSettings(
-            printer=self._config.printing.printer,
-            copies=self._copies.value(),
-            duplex=self._sides.current() == "double",
-            paper=self._paper.current(),
-            dpi=self._config.printing.dpi,
-            actual_size=self._actual_size,
-            job_name=self._sources[0].name if self._sources else "打印助手",
+        settings = self._current_settings(
+            job_name=self._sources[0].name if self._sources else "打印助手"
         )
         self.show_progress(0, self._pages, texts.printing_progress(0, self._pages))
         run_async(

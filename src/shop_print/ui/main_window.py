@@ -26,27 +26,19 @@ from .. import config as config_mod
 from .. import paths, texts
 from ..core import convert, history, intake
 from ..core.enhance import EnhanceOptions
-from ..texts import ErrorKind, friendly_error
+from ..core.errors import ShopPrintError
+from ..texts import ErrorKind
 from .page_cards import CardsPage
 from .page_inbox import InboxPage
 from .page_ocr import OcrPage
 from .page_photo import PhotoPage
 from .page_print import PrintPage
+from .workers import run_async
 
 logger = logging.getLogger(__name__)
 
 _PAGE_HOME, _PAGE_PRINT, _PAGE_PHOTO, _PAGE_OCR, _PAGE_INBOX, _PAGE_CARDS = range(6)
 _SECRET_CLICKS = 5
-
-
-def _file_filter() -> str:
-    images = " ".join(f"*{s}" for s in sorted(convert.IMAGE_SUFFIXES))
-    docs = " ".join(f"*{s}" for s in sorted(convert.OFFICE_SUFFIXES | convert.PDF_SUFFIXES))
-    texts_ = " ".join(f"*{s}" for s in sorted(convert.TEXT_SUFFIXES))
-    return (
-        f"可以打印的文件 ({images} {docs} {texts_});;"
-        f"图片 ({images});;办公文档和 PDF ({docs});;所有文件 (*)"
-    )
 
 
 class _WatchBridge(QObject):
@@ -138,27 +130,25 @@ class MainWindow(QMainWindow):
         title.setProperty("role", "title")
         title.secretActivated.connect(self._open_settings)
 
-        self._card_print = BigCard("📄", texts.HOME_CARD_PRINT_TITLE, texts.HOME_CARD_PRINT_HINT)
         self._card_photo = BigCard("🖼️", texts.HOME_CARD_PHOTO_TITLE, texts.HOME_CARD_PHOTO_HINT)
         self._card_ocr = BigCard("🔤", texts.HOME_CARD_OCR_TITLE, texts.HOME_CARD_OCR_HINT)
         self._card_cards = BigCard("🪪", texts.HOME_CARD_CARDS_TITLE, texts.HOME_CARD_CARDS_HINT)
         self._card_inbox = BigCard("📥", texts.HOME_CARD_INBOX_TITLE, texts.HOME_CARD_INBOX_HINT)
         self._card_paste = BigCard("📋", texts.HOME_CARD_PASTE_TITLE, texts.HOME_CARD_PASTE_HINT)
 
-        self._card_print.clicked.connect(self._pick_documents)
         self._card_photo.clicked.connect(lambda: self._pick_image(self.open_photo))
         self._card_ocr.clicked.connect(lambda: self._pick_image(self.open_ocr))
         self._card_cards.clicked.connect(lambda: self.open_cards(None))
         self._card_inbox.clicked.connect(self.open_inbox)
         self._card_paste.clicked.connect(self._paste_image)
 
-        # 三列两行：六个入口全在一屏里，不用滚动、不用翻页。
-        # 「粘贴图片」也做成卡片 —— 它是微信图片最短的一条路，不该缩成一个小按钮。
+        # 没有「打印文档」这一项：原件是 Word/Excel/PDF 的时候直接在 Office 里
+        # 改好再打就行，工具在这上面帮不了忙（还多一道转换）。
+        # 需要打印的入口都在具体的活儿里：照片变清楚 / 证件 / 微信收到的文件。
         grid = QGridLayout()
         grid.setSpacing(18)
         for index, card in enumerate(
             (
-                self._card_print,
                 self._card_photo,
                 self._card_ocr,
                 self._card_cards,
@@ -185,13 +175,6 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentIndex(_PAGE_HOME)
 
     # ── 选文件 ──────────────────────────────────────────────────
-    def _pick_documents(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "选择要打印的文件", str(self._start_dir()), _file_filter()
-        )
-        if files:
-            self.open_print([Path(f) for f in files])
-
     def _pick_image(self, handler) -> None:
         images = " ".join(f"*{s}" for s in sorted(convert.IMAGE_SUFFIXES))
         path, _ = QFileDialog.getOpenFileName(
@@ -249,18 +232,36 @@ class MainWindow(QMainWindow):
 
     # ── 剪贴板与拖拽 ────────────────────────────────────────────
     def _paste_image(self) -> None:
+        """粘贴剪贴板里的图片。
+
+        取图和存盘都丢到后台线程：手机拍的图有十几兆，在界面线程里编码 PNG
+        会让窗口卡住几秒 —— Windows 这时候画的是一张定格的旧画面，看起来
+        就像"按钮变形卡死"。
+        """
+        self.statusBar().showMessage(texts.BUSY_PROCESSING, 3000)
+        run_async(
+            self._grab_clipboard,
+            on_done=self._on_pasted,
+            on_failed=lambda message: QMessageBox.information(self, texts.APP_TITLE, message),
+        )
+
+    @staticmethod
+    def _grab_clipboard() -> tuple[str, object]:
+        """返回 (类型, 内容)。在工作线程里跑，所以不碰任何界面对象。"""
         image = intake.clipboard_image()
-        if image is None:
-            files = intake.clipboard_files()
-            if files:
-                self.open_print([f.path for f in files])
-                return
-            QMessageBox.information(
-                self, texts.APP_TITLE, friendly_error(ErrorKind.NO_IMAGE_IN_CLIPBOARD)
-            )
-            return
-        saved = intake.save_incoming_image(image)
-        self.open_photo(saved)
+        if image is not None:
+            return ("image", intake.save_incoming_image(image))
+        files = intake.clipboard_files()
+        if files:
+            return ("files", [f.path for f in files])
+        raise ShopPrintError(ErrorKind.NO_IMAGE_IN_CLIPBOARD, "剪贴板里没有图片也没有文件")
+
+    def _on_pasted(self, result: tuple[str, object]) -> None:
+        kind, payload = result
+        if kind == "image":
+            self.open_photo(payload)  # type: ignore[arg-type]
+        else:
+            self.open_print(payload)  # type: ignore[arg-type]
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():

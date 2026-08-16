@@ -25,6 +25,7 @@ from ..config import AppConfig
 from ..core import intake
 from .page_base import SubPage
 from .page_ocr import open_in_explorer
+from .workers import run_async
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +153,23 @@ class InboxPage(SubPage):
         self.body.addWidget(scroll, stretch=1)
 
     def reload(self) -> None:
-        directories = intake.watch_dirs(self._config.intake)
-        self.set_files(intake.scan(directories, self._config.intake.recent_days))
+        """重新扫一遍监控目录。
+
+        扫描放到工作线程：微信目录可能有上万个文件，`rglob` 在界面线程里跑
+        会让窗口卡住几秒（Windows 这时画的是定格的旧画面，看着像"卡死变形"）。
+        """
+        self.show_busy("正在看有没有新文件…")
+        run_async(
+            intake.scan,
+            intake.watch_dirs(self._config.intake),
+            self._config.intake.recent_days,
+            on_done=self._on_scanned,
+            on_failed=self.show_error,
+        )
+
+    def _on_scanned(self, files: list[intake.SourceFile]) -> None:
+        self.clear_status()
+        self.set_files(files)
 
     def _show_empty(self) -> None:
         """空状态上下都留白，让说明文字落在视线正中，而不是缩在页面顶上。"""

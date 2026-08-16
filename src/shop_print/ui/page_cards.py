@@ -44,18 +44,20 @@ def _type_options() -> list[tuple[str, str]]:
 
 
 class CardSlot(QWidget):
-    """一个位置：名字 + 状态 + 选图片/粘贴。
+    """一个位置：名字 + 状态 + 选图片/粘贴，**也可以直接把图片拖进来**。
 
     刻意**不放缩略图** —— 右边那张 A4 预览已经把两张的位置和大小都画出来了，
     再放两个小缩略图只会把预览挤小。窗口压到 1024×640 时这一点尤其要紧。
     """
 
     changed = Signal()
+    dropped = Signal(object)  # 拖进来的文件路径，交给页面去异步读图
 
     def __init__(self, label: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.image: np.ndarray | None = None
         self.source: Path | None = None
+        self.setAcceptDrops(True)  # 拖一张图片到这一行就等于选图片
 
         self._title = QLabel(label)
         self._title.setProperty("role", "section")
@@ -97,6 +99,12 @@ class CardSlot(QWidget):
         self._repolish(self._state)
         self.changed.emit()
 
+    def set_loading(self, source: Path) -> None:
+        """图还在后台读，先把状态显示出来 —— 别让人以为点了没反应。"""
+        self._state.setText(f"正在打开 {source.name}…")
+        self._state.setProperty("role", "hint")
+        self._repolish(self._state)
+
     def clear(self) -> None:
         self.image = None
         self.source = None
@@ -118,7 +126,7 @@ class CardSlot(QWidget):
             self, f"选择{self.label}的图片", str(start), f"图片 ({suffixes})"
         )
         if path:
-            self.set_image(enhance_mod.load_image(path), Path(path))
+            self.dropped.emit(Path(path))
 
     def _on_paste(self) -> None:
         image = intake.clipboard_image()
@@ -130,6 +138,39 @@ class CardSlot(QWidget):
             )
             return
         self.set_image(image)
+
+    # ── 拖进来 ──────────────────────────────────────────────────
+    def dragEnterEvent(self, event) -> None:
+        if _first_image(event.mimeData()) is not None:
+            event.acceptProposedAction()
+            self.setProperty("dropping", True)
+            self._repolish(self)
+
+    def dragLeaveEvent(self, event) -> None:
+        self.setProperty("dropping", False)
+        self._repolish(self)
+
+    def dropEvent(self, event) -> None:
+        path = _first_image(event.mimeData())
+        self.setProperty("dropping", False)
+        self._repolish(self)
+        if path is None:
+            return
+        event.acceptProposedAction()
+        self.dropped.emit(path)
+
+
+def _first_image(mime) -> Path | None:
+    """拖进来的东西里第一张能用的图片。不是图片就当没拖。"""
+    if not mime.hasUrls():
+        return None
+    for url in mime.urls():
+        if not url.isLocalFile():
+            continue
+        path = Path(url.toLocalFile())
+        if path.suffix.lower() in convert.IMAGE_SUFFIXES:
+            return path
+    return None
 
 
 class CardsPage(SubPage):
@@ -148,6 +189,7 @@ class CardsPage(SubPage):
         self._slots = (CardSlot(front), CardSlot(back))
         for slot in self._slots:
             slot.changed.connect(self._on_slots_changed)
+            slot.dropped.connect(lambda path, s=slot: self._load_into(s, path))
 
         self._preview = ImagePreview("两张都选好就会显示打印出来的样子")
         # A4 预览是这一页的主角（长辈靠它确认位置和大小），最小值给小一点，
@@ -195,13 +237,32 @@ class CardsPage(SubPage):
 
     # ── 外部入口 ────────────────────────────────────────────────
     def load(self, sources: Path | list[Path] | None = None) -> None:
-        """把图片放进空位。从首页/收件页跳进来时用，一次给一张或两张都行。"""
+        """把图片放进空位。从首页/收件页跳进来时用，一次给一张或两张都行。
+
+        位置要**一次分配好**：读图是异步的，边读边看"哪个位置还空着"的话，
+        两张图会抢同一个空位（第二张把第一张顶掉）。
+        """
         if sources is None:
             return
         items = [sources] if isinstance(sources, str | Path) else list(sources)
-        for source in items:
-            slot = next((s for s in self._slots if not s.filled), self._slots[0])
-            slot.set_image(enhance_mod.load_image(source), Path(source))
+        空位 = [slot for slot in self._slots if not slot.filled]
+        目标 = 空位 + [slot for slot in self._slots if slot not in 空位]
+        for source, slot in zip(items, 目标, strict=False):
+            self._load_into(slot, Path(source))
+
+    def _load_into(self, slot: CardSlot, path: Path) -> None:
+        """读图放到工作线程：手机拍的图十几兆，在界面线程里解码会卡住窗口。"""
+        slot.set_loading(path)
+        run_async(
+            enhance_mod.load_image,
+            path,
+            on_done=lambda image: slot.set_image(image, path),
+            on_failed=lambda message: self._on_load_failed(slot, message),
+        )
+
+    def _on_load_failed(self, slot: CardSlot, message: str) -> None:
+        slot.clear()
+        self.show_error(message)
 
     # ── 交互 ────────────────────────────────────────────────────
     def _on_type_changed(self, key: str) -> None:

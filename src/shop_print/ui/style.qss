@@ -17,13 +17,17 @@ QLabel[role="ok-small"] { font-size: 15pt; color: #1a9c3c; }
 QLabel[role="warn"]    { font-size: 16pt; color: #c8460f; }
 QLabel[role="section"] { font-size: 17pt; font-weight: bold; }
 
-/* 普通按钮 */
+/* 普通按钮。
+   高度**上下都钉死**：只写 min-height 时，按钮在有余量的布局里会被拉高，
+   同一屏上几个按钮胖瘦不一，看着就是"变形"。padding 只给左右，
+   不和高度打架。 */
 QPushButton {
     background: #ffffff;
     border: 2px solid #c8d0da;
     border-radius: 10px;
-    padding: 12px 22px;
-    min-height: 44px;
+    padding: 0 22px;
+    min-height: 56px;
+    max-height: 56px;
     font-size: 18pt;
 }
 QPushButton:hover   { border-color: #1677ff; }
@@ -40,7 +44,9 @@ QPushButton[role="primary"] {
     color: #ffffff;
     border: none;
     border-radius: 12px;
+    padding: 0 24px;
     min-height: 68px;
+    max-height: 68px;
     font-size: 24pt;
     font-weight: bold;
 }
@@ -54,17 +60,20 @@ QPushButton[role="back"] {
     border: none;
     color: #1677ff;
     font-size: 20pt;
-    padding: 8px 12px;
-    min-height: 44px;
+    padding: 0 12px;
+    min-height: 48px;
+    max-height: 48px;
     text-align: left;
 }
 QPushButton[role="back"]:hover { text-decoration: underline; }
+QPushButton[role="back"]:pressed { color: #0d5bd6; }
 
 /* 加减按钮：长辈点不准小箭头，所以用大方块 */
 QPushButton[role="stepper"] {
     min-width: 56px;
     max-width: 56px;
     min-height: 56px;
+    max-height: 56px;
     font-size: 26pt;
     font-weight: bold;
     padding: 0;
@@ -73,21 +82,24 @@ QPushButton[role="stepper"] {
 /* 二选一 / 多选一的大按钮组，代替下拉框 */
 QPushButton[role="choice"] {
     min-height: 52px;
+    max-height: 52px;
+    padding: 0 18px;
     font-size: 17pt;
-    padding: 8px 18px;
 }
 QPushButton[role="choice"]:checked {
     background: #1677ff;
     color: #ffffff;
     border-color: #1677ff;
 }
+QPushButton[role="choice"]:checked:hover { background: #0d6ae8; }
 
 /* 证件页那两行「选图片 / 粘贴」：比普通按钮矮一点，好让 A4 预览多占地方。
    仍然满足硬性要求：可点高度 ≥44px、文字 ≥18pt。 */
 QPushButton[role="slot"] {
     min-height: 52px;
+    max-height: 52px;
+    padding: 0 16px;
     font-size: 18pt;
-    padding: 8px 16px;
 }
 
 /* 卡片和预览框里的文字必须透明背景：上面那条 QWidget 规则会给每个 QLabel
@@ -96,18 +108,27 @@ QPushButton[role="card"] QLabel,
 QFrame[role="preview"] QLabel,
 QFrame[role="filecard"] QLabel { background: transparent; }
 
-/* 首页大卡片 */
+/* 首页大卡片。卡片本身是要跟着窗口长大的，所以只钉最小值，不钉最大值 */
 QPushButton[role="card"] {
     background: #ffffff;
     border: 2px solid #dfe5ec;
     border-radius: 18px;
     min-width: 260px;
     min-height: 180px;
+    max-height: 16777215;
     padding: 18px;
+    font-size: 16pt;
     text-align: center;
 }
 QPushButton[role="card"]:hover   { border-color: #1677ff; background: #f7fbff; }
 QPushButton[role="card"]:pressed { background: #eef4ff; }
+
+/* 证件页的位置行：拖图片进来的时候整行高亮，让人知道松手就放这儿 */
+QWidget[dropping="true"] {
+    background: #eef6ff;
+    border: 2px dashed #1677ff;
+    border-radius: 10px;
+}
 
 /* 文件卡片（微信收到的文件列表） */
 QFrame[role="filecard"] {

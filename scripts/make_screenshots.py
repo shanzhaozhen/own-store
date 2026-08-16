@@ -86,10 +86,10 @@ def main() -> int:
 
     for name, action in (
         ("首页", window.go_home),
-        ("打印文档", lambda: window.open_print([sample])),
         ("照片变清楚", lambda: window.open_photo(sample)),
         ("照片转文字", lambda: window.open_ocr(sample)),
         ("证件二合一", lambda: window.open_cards([card_front, card_back])),
+        ("打印预览", lambda: window.open_print([sample])),
         ("微信收到的文件", window.open_inbox),
     ):
         action()

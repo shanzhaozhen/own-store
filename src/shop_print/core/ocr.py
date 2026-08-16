@@ -403,6 +403,130 @@ def to_txt(result: OcrResult, out_path: str | Path) -> Path:
     return out_path
 
 
+# ── 保留原有排版的 Word ─────────────────────────────────────────
+_W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+_VML_NS = 'xmlns:v="urn:schemas-microsoft-com:vml"'
+# 文本框比文字本身放大一点，免得 Word 按自己的字宽算完就折行了
+_BOX_SLACK = 1.18
+# 检测框的高度包含上下一点余量，字号按这个系数折算
+_FONT_FROM_BOX = 0.78
+_MIN_FONT_PT = 6.0
+_PT_PER_MM = 72.0 / 25.4
+
+
+def _escape(text: str) -> str:
+    return (
+        text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+    )
+
+
+def _textbox_xml(
+    lines: list[str], x_pt: float, y_pt: float, w_pt: float, h_pt: float, font_pt: float, index: int
+) -> str:
+    """一个绝对定位的文本框（VML）。**框里的字仍然能选中、复制、修改。**
+
+    用 VML（`v:rect` + `v:textbox`）而不是新式 DrawingML：写法短得多，
+    Word 2007 以来一直支持。位置相对**页面**，这样才能和原图坐标一一对应。
+    """
+    half = max(2, round(font_pt * 2))  # w:sz 的单位是半磅
+    body = "".join(
+        '<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr>'
+        f'<w:r><w:rPr><w:rFonts w:ascii="宋体" w:eastAsia="宋体" w:hAnsi="宋体"/>'
+        f'<w:sz w:val="{half}"/><w:szCs w:val="{half}"/></w:rPr>'
+        f'<w:t xml:space="preserve">{_escape(line)}</w:t></w:r></w:p>'
+        for line in lines
+    )
+    style = (
+        f"position:absolute;margin-left:{x_pt:.2f}pt;margin-top:{y_pt:.2f}pt;"
+        f"width:{w_pt:.2f}pt;height:{h_pt:.2f}pt;z-index:{index};"
+        "mso-position-horizontal-relative:page;mso-position-vertical-relative:page"
+    )
+    return (
+        f"<w:r><w:pict>"
+        f'<v:rect style="{style}" filled="f" stroked="f">'
+        f'<v:textbox inset="0,0,0,0"><w:txbxContent>{body}</w:txbxContent></v:textbox>'
+        "</v:rect></w:pict></w:r>"
+    )
+
+
+def to_docx_layout(
+    result: OcrResult,
+    out_path: str | Path,
+    page_width_mm: float = A4_WIDTH_MM,
+    page_height_mm: float = A4_HEIGHT_MM,
+) -> Path:
+    """**保留原有排版**的 Word：每段文字放进一个按原位置摆好的文本框。
+
+    和 `to_docx()`（顺排成普通段落）的区别：这里照着照片上的坐标摆，表格、
+    多栏、签名的位置都还在原处；文字仍在文本框里，能选中、复制、改错字。
+    代价是它更像"照着原件重排的版"，不方便整篇重新排版 —— 那种需求用 `to_docx()`。
+
+    坐标怎么换：识别是在整页图上做的，所以 `1 像素 = 页宽 / 图宽`，再换成磅。
+    """
+    from docx import Document
+    from docx.oxml import parse_xml
+    from docx.shared import Mm, Pt
+
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if result.page_width <= 0:
+        raise ShopPrintError(ErrorKind.OCR_EMPTY, "没有页面尺寸，排不出版")
+
+    mm_per_px = page_width_mm / float(result.page_width)
+
+    document = Document()
+    for section in document.sections:
+        section.page_width = Mm(page_width_mm)
+        section.page_height = Mm(page_height_mm)
+        # 文本框是相对页面定位的，页边距只影响那个空的锚段落，设小一点省地方
+        section.top_margin = section.bottom_margin = Mm(10)
+        section.left_margin = section.right_margin = Mm(10)
+
+    # 文本框必须挂在某个段落上（Word 的要求），所以留一个空段落当锚点
+    anchor = document.add_paragraph()
+    anchor.paragraph_format.space_after = Pt(0)
+    cursor = anchor._p  # noqa: SLF001 —— 往后依次插入，保持阅读顺序
+
+    for index, paragraph in enumerate(result.paragraphs, start=1):
+        lines = [line.text for line in paragraph.lines if line.text.strip()]
+        if not lines:
+            continue
+        x0 = min(line.x0 for line in paragraph.lines)
+        y0 = min(line.y0 for line in paragraph.lines)
+        x1 = max(line.x1 for line in paragraph.lines)
+        y1 = max(line.y1 for line in paragraph.lines)
+        font_pt = max(
+            _MIN_FONT_PT,
+            _median([line.height for line in paragraph.lines], 1.0)
+            * mm_per_px
+            * _PT_PER_MM
+            * _FONT_FROM_BOX,
+        )
+        width_pt = max(font_pt, (x1 - x0) * mm_per_px * _PT_PER_MM * _BOX_SLACK)
+        height_pt = max(font_pt * 1.4, (y1 - y0) * mm_per_px * _PT_PER_MM * 1.4)
+        xml = (
+            f"<w:p {_W_NS} {_VML_NS}>"
+            + _textbox_xml(
+                lines,
+                x0 * mm_per_px * _PT_PER_MM,
+                y0 * mm_per_px * _PT_PER_MM,
+                width_pt,
+                height_pt,
+                font_pt,
+                index,
+            )
+            + "</w:p>"
+        )
+        # 按阅读顺序往后插：都插在锚点后面的话顺序会整个反过来，
+        # 虽然位置一样，但在 Word 里按 Tab 或者用读屏软件时顺序是乱的
+        element = parse_xml(xml)
+        cursor.addnext(element)
+        cursor = element
+
+    document.save(out_path)
+    return out_path
+
+
 def image_to_document(src: str | Path, out_dir: Path | None = None) -> tuple[Path, Path, OcrResult]:
     """一步到底：图片 → (docx, txt, 识别结果)。"""
     src = Path(src)

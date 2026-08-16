@@ -8,6 +8,8 @@
 
 from __future__ import annotations
 
+import io
+
 import pymupdf
 import pytest
 
@@ -336,6 +338,74 @@ def test_横向页在实物尺寸下宽高要换过来(monkeypatch) -> None:
 def test_默认不开实物尺寸() -> None:
     """普通文档要缩到可打印区，不然边上的内容会被裁掉。"""
     assert printing.PrintSettings().actual_size is False
+
+
+# ── 打印预览：画的必须和真打出来的一样 ───────────────────────────
+def test_预览画的是整张纸(tmp_path) -> None:
+    """预览要能回答"纸上什么样"：纸多大、内容在哪、四周打不到的边在哪。"""
+    from PIL import Image
+
+    src = 造pdf(tmp_path / "一页.pdf")
+    纸 = printing.PaperMetrics(210, 297, 200, 287, 5, 5)
+    png = printing.preview_sheet(src, 0, printing.PrintSettings(), dpi=100, metrics=纸)
+    assert png.startswith(b"\x89PNG")
+    with Image.open(io.BytesIO(png)) as image:
+        assert image.width / 100 * 25.4 == pytest.approx(210, abs=1)  # 纸的宽
+        assert image.height / 100 * 25.4 == pytest.approx(297, abs=1)
+
+
+def test_实物尺寸预览不缩内容(tmp_path) -> None:
+    """同一页：实物尺寸模式下内容比"缩到可打印区"模式大 —— 差的就是那 4–5mm 的边。
+
+    用一整页涂黑的 PDF 来量：普通样张上墨只有几行字，量不出页面被缩了多少。
+    """
+    from PIL import Image
+
+    src = tmp_path / "整页黑.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=595.276, height=841.89)
+    page.draw_rect(page.rect, color=None, fill=(0, 0, 0))
+    document.save(src)
+    document.close()
+
+    纸 = printing.PaperMetrics(210, 297, 200, 287, 5, 5)
+
+    def 黑区宽度(actual_size: bool) -> int:
+        png = printing.preview_sheet(
+            src, 0, printing.PrintSettings(actual_size=actual_size), dpi=100, metrics=纸
+        )
+        with Image.open(io.BytesIO(png)) as image:
+            gray = image.convert("L")
+            pixels = gray.load()
+            middle = gray.height // 2
+            黑 = [x for x in range(gray.width) if pixels[x, middle] < 100]
+            return max(黑) - min(黑) + 1 if 黑 else 0
+
+    缩过的 = 黑区宽度(False)
+    原大的 = 黑区宽度(True)
+    assert 缩过的 / 100 * 25.4 == pytest.approx(200, abs=2)  # 缩到可打印区宽度
+    assert 原大的 / 100 * 25.4 == pytest.approx(210, abs=2)  # 整张纸宽
+    assert 原大的 > 缩过的
+
+
+def test_问不出边距时按整张纸算() -> None:
+    """驱动抽风也要给得出预览 —— 宁可乐观，不要没有预览。"""
+    metrics = printing.paper_metrics("根本不存在的打印机", "A4")
+    assert metrics.measured is False
+    assert metrics.paper_w_mm == pytest.approx(210, abs=0.5)
+    assert metrics.printable_w_mm == pytest.approx(210, abs=0.5)
+    assert "问不出来" in metrics.margin_note
+
+
+@needs_pdf_printer
+def test_量得出替身打印机的可打印区(屏蔽驱动噪音) -> None:
+    """「Microsoft Print to PDF」可打印区正好等于纸张，所以这里 offset 是 0。
+    **真打印机四周会吃 4–5mm**，那部分只能到店铺机上量。"""
+    metrics = printing.paper_metrics(替身打印机, "A4")
+    assert metrics.measured is True
+    assert metrics.paper_w_mm == pytest.approx(210, abs=1)
+    assert metrics.paper_h_mm == pytest.approx(297, abs=1)
+    assert metrics.printable_w_mm <= metrics.paper_w_mm + 0.01
 
 
 @needs_pdf_printer

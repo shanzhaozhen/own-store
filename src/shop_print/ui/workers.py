@@ -22,6 +22,7 @@ class _Signals(QObject):
     done = Signal(object)
     failed = Signal(str)  # 已经翻译成人话的提示
     progress = Signal(int, int)
+    finished = Signal()  # 无论成败都会发，用来放开下面那份强引用
 
 
 class Worker(QRunnable):
@@ -49,6 +50,15 @@ class Worker(QRunnable):
             self.signals.failed.emit(friendly_error(ErrorKind.UNKNOWN))
         else:
             self.signals.done.emit(result)
+        finally:
+            self.signals.finished.emit()
+
+
+# 正在跑的任务。**必须留一份强引用**：`signals` 是 Worker 的 Python 属性，
+# 调用方通常不接返回值，Worker 一被垃圾回收，signals 跟着没了，连接也就断了 ——
+# 回调再也不会到，界面上表现为"点了没反应"（用 lambda 当回调时尤其容易踩到，
+# 用 QObject 的绑定方法时会侥幸活着，但不能指望这种巧合）。
+_RUNNING: set[Worker] = set()
 
 
 def run_async(
@@ -61,6 +71,7 @@ def run_async(
 ) -> Worker:
     """起一个后台任务。回调都在主线程执行，可以直接改界面。"""
     worker = Worker(fn, *args, **kwargs)
+    _RUNNING.add(worker)
     if on_done is not None:
         worker.signals.done.connect(on_done, Qt.ConnectionType.QueuedConnection)
     if on_failed is not None:
@@ -69,5 +80,9 @@ def run_async(
         worker.signals.progress.connect(on_progress, Qt.ConnectionType.QueuedConnection)
         kwargs["progress"] = worker.signals.progress.emit
         worker._kwargs = kwargs  # noqa: SLF001 —— 同模块内，注入进度回调
+    # finished 排在 done/failed 后面进队列，所以回调一定先被送到再放引用
+    worker.signals.finished.connect(
+        lambda: _RUNNING.discard(worker), Qt.ConnectionType.QueuedConnection
+    )
     QThreadPool.globalInstance().start(worker)
     return worker
