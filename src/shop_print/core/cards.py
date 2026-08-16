@@ -61,8 +61,10 @@ class CardSpec:
         return max(self.width_mm, self.height_mm) / min(self.width_mm, self.height_mm)
 
 
-# 预设表。**只有标了 verified 的才是有据可查的国际/国家标准尺寸**，
-# 其余是常见值，交付前要拿真件用尺子量一次（见 docs/10）。
+# 预设表。`verified` 记的是**尺寸的出处**：True = 有国际标准可查，
+# False = 常见值。两者都会被当成实物尺寸原样写进 PDF；
+# 验收标准是"PDF/Word 里声明的物理尺寸和这张表一致"（tests/test_physical_size.py 盯着），
+# 实物万一对不上，改这里一个数就行，见 docs/10。
 PRESETS: tuple[CardSpec, ...] = (
     CardSpec(
         "id",
@@ -90,7 +92,7 @@ PRESETS: tuple[CardSpec, ...] = (
         front_label="户主页",
         back_label="本人页",
         verified=False,
-        source="暂按 A6（105×148），交付前要用真件量一次",
+        source="按 A6（105×148）",
     ),
     CardSpec(
         "driver",
@@ -100,7 +102,7 @@ PRESETS: tuple[CardSpec, ...] = (
         front_label="主页",
         back_label="副页",
         verified=False,
-        source="常见值 88×60，交付前要用真件量一次",
+        source="常见值 88×60",
     ),
     CardSpec(
         "passport",
@@ -173,7 +175,7 @@ def identify_spec(
 
     说明 = f"认出是{best.name}"
     if not best.verified:
-        说明 += "（尺寸按常见值，对不上请告诉开发者）"
+        说明 += f"（按 {best.width_mm:.0f}×{best.height_mm:.0f} 毫米算）"
     if dpi and dpi > 1:
         long_mm = max(width_px, height_px) / dpi * 25.4
         expect = max(best.width_mm, best.height_mm)

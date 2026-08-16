@@ -37,7 +37,9 @@ def test_身份证是标准卡片尺寸() -> None:
 
 
 def test_没核实的尺寸要标出来() -> None:
-    """户口本、驾驶证是常见值不是标准值，界面和文档都要说清楚。"""
+    """户口本、驾驶证的尺寸是常见值不是标准值，`verified` 记的就是这个出处。
+    两者都照样按实物尺寸出图 —— 验收看的是"PDF 里声明的尺寸和预设表一致"
+    （tests/test_physical_size.py），实物对不上就改预设表里那一个数。"""
     未核实 = [p.key for p in cards.PRESETS if not p.verified]
     assert "household" in 未核实
     for key in 未核实:

@@ -29,6 +29,10 @@ logger = logging.getLogger(__name__)
 # 低于这个置信度就在界面上标出来，提示长辈核对
 LOW_CONFIDENCE = 0.70
 
+# 输出的 Word 用 A4：店里只有 A4/A3，和 convert / cards 出的 PDF 保持同一个物理尺寸
+A4_WIDTH_MM = 210.0
+A4_HEIGHT_MM = 297.0
+
 # 行聚类：两个框的 y 中心差小于「中位字高 × 这个系数」就算同一行
 _ROW_TOLERANCE = 0.6
 # 段落切分：行间距大于「中位行间距 × 这个系数」就算换段
@@ -343,16 +347,23 @@ def _set_cjk_font(run: Any, name: str = "宋体") -> None:
 
 
 def to_docx(result: OcrResult, out_path: str | Path) -> Path:
-    """生成可编辑的 Word。正文宋体小四、行距 1.5、首行缩进 2 字符。"""
+    """生成可编辑的 Word。**A4 纸**、正文宋体小四、行距 1.5、首行缩进 2 字符。
+
+    页面尺寸必须显式设成 A4：python-docx 自带的模板是美国 Letter
+    （215.9×279.4mm），店里只有 A4/A3 纸，拿 Letter 的文档去打，Word 会
+    自己缩放或者把版面挪位 —— 和 PDF 那条路出来的尺寸也就不一致了。
+    """
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt
+    from docx.shared import Mm, Pt
 
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     document = Document()
     for section in document.sections:
+        section.page_width = Mm(A4_WIDTH_MM)
+        section.page_height = Mm(A4_HEIGHT_MM)
         section.top_margin = section.bottom_margin = Pt(72)
         section.left_margin = section.right_margin = Pt(80)
 
