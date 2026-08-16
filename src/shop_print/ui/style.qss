@@ -1,0 +1,147 @@
+/* 全局样式。数值不是随便定的，对应 docs/06-界面规范.md 的硬性要求：
+   正文 ≥16pt、按钮文字 ≥18pt、主按钮高 ≥56px、可点区域 ≥44px。
+   浅色高对比，不做深色模式 —— 长辈更习惯白底黑字。 */
+
+QWidget {
+    background: #f5f7fa;
+    color: #1f2329;
+    font-family: "Microsoft YaHei", "微软雅黑", sans-serif;
+    font-size: 16pt;
+}
+
+QLabel[role="title"]   { font-size: 26pt; font-weight: bold; }
+QLabel[role="hint"]    { font-size: 14pt; color: #5c6672; }
+QLabel[role="status"]  { font-size: 20pt; font-weight: bold; }
+QLabel[role="ok"]      { font-size: 24pt; font-weight: bold; color: #1a9c3c; }
+QLabel[role="warn"]    { font-size: 16pt; color: #c8460f; }
+QLabel[role="section"] { font-size: 17pt; font-weight: bold; }
+
+/* 普通按钮 */
+QPushButton {
+    background: #ffffff;
+    border: 2px solid #c8d0da;
+    border-radius: 10px;
+    padding: 12px 22px;
+    min-height: 44px;
+    font-size: 18pt;
+}
+QPushButton:hover   { border-color: #1677ff; }
+QPushButton:pressed { background: #eef4ff; }
+QPushButton:disabled {
+    color: #a3adb8;
+    background: #eceff3;
+    border-color: #dde2e8;
+}
+
+/* 主按钮：每个页面同一位置、同一颜色的那个大绿钮 */
+QPushButton[role="primary"] {
+    background: #1a9c3c;
+    color: #ffffff;
+    border: none;
+    border-radius: 12px;
+    min-height: 68px;
+    font-size: 24pt;
+    font-weight: bold;
+}
+QPushButton[role="primary"]:hover   { background: #168733; }
+QPushButton[role="primary"]:pressed { background: #12712b; }
+QPushButton[role="primary"]:disabled { background: #b7c3ce; color: #eef1f4; }
+
+/* 返回按钮：永远在左上角同一个位置 */
+QPushButton[role="back"] {
+    background: transparent;
+    border: none;
+    color: #1677ff;
+    font-size: 20pt;
+    padding: 8px 12px;
+    min-height: 44px;
+    text-align: left;
+}
+QPushButton[role="back"]:hover { text-decoration: underline; }
+
+/* 加减按钮：长辈点不准小箭头，所以用大方块 */
+QPushButton[role="stepper"] {
+    min-width: 56px;
+    max-width: 56px;
+    min-height: 56px;
+    font-size: 26pt;
+    font-weight: bold;
+    padding: 0;
+}
+
+/* 二选一 / 多选一的大按钮组，代替下拉框 */
+QPushButton[role="choice"] {
+    min-height: 52px;
+    font-size: 17pt;
+    padding: 8px 18px;
+}
+QPushButton[role="choice"]:checked {
+    background: #1677ff;
+    color: #ffffff;
+    border-color: #1677ff;
+}
+
+/* 卡片和预览框里的文字必须透明背景：上面那条 QWidget 规则会给每个 QLabel
+   刷上灰底，在白色卡片上就显出一个个灰方块（截图里看得很明显）。 */
+QPushButton[role="card"] QLabel,
+QFrame[role="preview"] QLabel,
+QFrame[role="filecard"] QLabel { background: transparent; }
+
+/* 首页大卡片 */
+QPushButton[role="card"] {
+    background: #ffffff;
+    border: 2px solid #dfe5ec;
+    border-radius: 18px;
+    min-width: 260px;
+    min-height: 180px;
+    padding: 18px;
+    text-align: center;
+}
+QPushButton[role="card"]:hover   { border-color: #1677ff; background: #f7fbff; }
+QPushButton[role="card"]:pressed { background: #eef4ff; }
+
+/* 文件卡片（微信收到的文件列表） */
+QFrame[role="filecard"] {
+    background: #ffffff;
+    border: 2px solid #e3e8ee;
+    border-radius: 14px;
+}
+
+QProgressBar {
+    border: 2px solid #c8d0da;
+    border-radius: 10px;
+    min-height: 40px;
+    text-align: center;
+    font-size: 16pt;
+    background: #ffffff;
+}
+QProgressBar::chunk { background: #1677ff; border-radius: 8px; }
+
+QSlider::groove:horizontal { height: 12px; background: #dfe5ec; border-radius: 6px; }
+QSlider::sub-page:horizontal { background: #1677ff; border-radius: 6px; }
+QSlider::handle:horizontal {
+    width: 40px; height: 40px; margin: -15px 0;
+    background: #ffffff; border: 3px solid #1677ff; border-radius: 20px;
+}
+
+QComboBox { min-height: 48px; font-size: 16pt; padding: 6px 12px; background: #ffffff;
+            border: 2px solid #c8d0da; border-radius: 8px; }
+QComboBox QAbstractItemView { font-size: 16pt; }
+
+QTextEdit, QPlainTextEdit {
+    background: #ffffff; border: 2px solid #dfe5ec; border-radius: 10px;
+    font-size: 15pt; padding: 10px;
+}
+
+QScrollArea { border: none; background: transparent; }
+QScrollBar:vertical { width: 18px; background: #eceff3; }
+QScrollBar::handle:vertical { background: #c0c8d2; border-radius: 9px; min-height: 40px; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+
+QFrame[role="preview"] {
+    /* 底色刻意比纸白一点点：去底之后的纸是纯白的，衬在纯白框里就看不出
+       纸的边界在哪，长辈会以为"图没出来"。 */
+    background: #eceff4;
+    border: 2px solid #dfe5ec;
+    border-radius: 12px;
+}

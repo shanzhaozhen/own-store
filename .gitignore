@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# 打包产物
+build/
+dist/
+# build.ps1 全靠命令行参数，spec 是 PyInstaller 自动生成的中间产物
+*.spec
+*.spec.bak
+
+# 本地调试输出（增强前后对比图、测试 PDF 等）
+out/
+tmp/
+*.debug.png
+*.debug.pdf
+
+# 真实样张里可能含顾客隐私（身份证、合同、成绩单），
+# 只提交经过脱敏、可公开的样张；默认全部忽略，需要时用 git add -f 单独加。
+samples/*
+!samples/README.md
+
+# OCR 模型体积大，由 scripts 下载/放置，不进仓库
+src/shop_print/assets/models/*
+!src/shop_print/assets/models/README.md
+
+# 字体有授权问题，不进仓库
+src/shop_print/assets/fonts/*
+!src/shop_print/assets/fonts/README.md
+
+# Windows
+Thumbs.db
+desktop.ini

@@ -1,0 +1,18 @@
+# 统一换行符，避免在两台 Windows 机器之间来回改动时整文件 diff。
+* text=auto eol=lf
+
+# **.bat 必须是 CRLF**：cmd.exe 对只有 LF 的批处理文件在 goto / 标签上会出怪问题，
+# 而 安装到店铺电脑.bat 是父母双击运行的交付件，不能出这种事。
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制，别做换行符转换也别参与 diff
+*.png binary
+*.ico binary
+*.onnx binary
+*.ttf binary
+*.otf binary
+*.ttc binary
+*.docx binary
+*.xlsx binary
+*.pdf binary

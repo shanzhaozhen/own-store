@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shop-print"
+version = "0.1.0"
+description = "店铺打印助手 —— 给父母的打印复印店做的桌面工具"
+requires-python = ">=3.14,<3.15"
+
+# 版本全部钉死：店铺机不装 Python，只跑打包产物，
+# 必须保证换机器/换时间都能复现出同一套依赖。
+# 这些版本都已在 Python 3.14 (cp314) 上实测有轮子，见 docs/01-环境与设备.md
+dependencies = [
+    "PySide6==6.11.1",              # 界面
+    "opencv-python-headless==4.14.0.94",  # 必须 headless，完整版自带 Qt 会和 PySide6 冲突
+    "numpy==2.5.2",
+    "pillow==12.3.0",
+    "PyMuPDF==1.28.2",              # PDF 生成 / 渲染预览 / 打印光栅化
+    "rapidocr==3.9.2",              # 本地 OCR（不要换成 paddleocr，cp314 无 paddlepaddle 轮子）
+    "onnxruntime==1.28.0",
+    "python-docx==1.2.0",           # OCR 结果导出 Word
+    "openpyxl==3.1.5",              # 读 xlsx 元信息（页面方向判断），转换本身用 Excel COM
+    "pywin32==312",                 # 打印（win32print/win32ui）+ Office COM
+    "watchdog==6.0.0",              # 监控微信目录 / 待打印目录
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.16.3",
+    "pyinstaller==6.22.1",
+]
+
+[project.scripts]
+shop-print = "shop_print.__main__:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+shop_print = ["assets/**/*", "ui/*.qss"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "SLF"]
+ignore = [
+    "RUF001",  # 全角标点在中文文案里是正常的
+    "RUF002",
+    "RUF003",
+    "E501",    # 行长由 formatter 管，中文注释容易超
+]
+
+[tool.ruff.lint.per-file-ignores]
+"src/shop_print/texts.py" = ["RUF001", "RUF002", "RUF003"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "needs_office: 需要本机装有 Microsoft Office 才能跑",
+    "needs_printer: 需要真实/虚拟打印机才能跑",
+    "needs_samples: 需要 samples/ 里有真实拍照样张才能跑",
+]
