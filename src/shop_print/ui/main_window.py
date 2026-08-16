@@ -14,11 +14,9 @@ from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QFileDialog,
     QGridLayout,
-    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -29,6 +27,7 @@ from .. import paths, texts
 from ..core import convert, history, intake
 from ..core.enhance import EnhanceOptions
 from ..texts import ErrorKind, friendly_error
+from .page_cards import CardsPage
 from .page_inbox import InboxPage
 from .page_ocr import OcrPage
 from .page_photo import PhotoPage
@@ -36,7 +35,7 @@ from .page_print import PrintPage
 
 logger = logging.getLogger(__name__)
 
-_PAGE_HOME, _PAGE_PRINT, _PAGE_PHOTO, _PAGE_OCR, _PAGE_INBOX = range(5)
+_PAGE_HOME, _PAGE_PRINT, _PAGE_PHOTO, _PAGE_OCR, _PAGE_INBOX, _PAGE_CARDS = range(6)
 _SECRET_CLICKS = 5
 
 
@@ -95,6 +94,7 @@ class MainWindow(QMainWindow):
         self._photo_page = PhotoPage(config)
         self._ocr_page = OcrPage(config)
         self._inbox_page = InboxPage(config)
+        self._cards_page = CardsPage(config)
 
         for page in (
             self._home,
@@ -102,16 +102,28 @@ class MainWindow(QMainWindow):
             self._photo_page,
             self._ocr_page,
             self._inbox_page,
+            self._cards_page,
         ):
             self._stack.addWidget(page)
 
-        for page in (self._print_page, self._photo_page, self._ocr_page, self._inbox_page):
+        for page in (
+            self._print_page,
+            self._photo_page,
+            self._ocr_page,
+            self._inbox_page,
+            self._cards_page,
+        ):
             page.back.connect(self.go_home)
 
         self._photo_page.printRequested.connect(self._print_with_enhance)
+        # 证件那条路必须按实物尺寸打：缩了复印件就作废了
+        self._cards_page.printRequested.connect(
+            lambda files: self.open_print(files, actual_size=True)
+        )
         self._inbox_page.printRequested.connect(self.open_print)
         self._inbox_page.enhanceRequested.connect(self.open_photo)
         self._inbox_page.ocrRequested.connect(self.open_ocr)
+        self._inbox_page.cardRequested.connect(self.open_cards)
         self._inbox_page.pasteRequested.connect(self._paste_image)
 
         history.init()
@@ -129,37 +141,42 @@ class MainWindow(QMainWindow):
         self._card_print = BigCard("📄", texts.HOME_CARD_PRINT_TITLE, texts.HOME_CARD_PRINT_HINT)
         self._card_photo = BigCard("🖼️", texts.HOME_CARD_PHOTO_TITLE, texts.HOME_CARD_PHOTO_HINT)
         self._card_ocr = BigCard("🔤", texts.HOME_CARD_OCR_TITLE, texts.HOME_CARD_OCR_HINT)
+        self._card_cards = BigCard("🪪", texts.HOME_CARD_CARDS_TITLE, texts.HOME_CARD_CARDS_HINT)
         self._card_inbox = BigCard("📥", texts.HOME_CARD_INBOX_TITLE, texts.HOME_CARD_INBOX_HINT)
+        self._card_paste = BigCard("📋", texts.HOME_CARD_PASTE_TITLE, texts.HOME_CARD_PASTE_HINT)
 
         self._card_print.clicked.connect(self._pick_documents)
         self._card_photo.clicked.connect(lambda: self._pick_image(self.open_photo))
         self._card_ocr.clicked.connect(lambda: self._pick_image(self.open_ocr))
+        self._card_cards.clicked.connect(lambda: self.open_cards(None))
         self._card_inbox.clicked.connect(self.open_inbox)
+        self._card_paste.clicked.connect(self._paste_image)
 
+        # 三列两行：六个入口全在一屏里，不用滚动、不用翻页。
+        # 「粘贴图片」也做成卡片 —— 它是微信图片最短的一条路，不该缩成一个小按钮。
         grid = QGridLayout()
-        grid.setSpacing(22)
-        grid.addWidget(self._card_print, 0, 0)
-        grid.addWidget(self._card_photo, 0, 1)
-        grid.addWidget(self._card_ocr, 1, 0)
-        grid.addWidget(self._card_inbox, 1, 1)
+        grid.setSpacing(18)
+        for index, card in enumerate(
+            (
+                self._card_print,
+                self._card_photo,
+                self._card_ocr,
+                self._card_cards,
+                self._card_inbox,
+                self._card_paste,
+            )
+        ):
+            grid.addWidget(card, index // 3, index % 3)
 
-        paste = QPushButton(texts.BTN_PASTE_IMAGE)
-        paste.clicked.connect(self._paste_image)
         drop_hint = QLabel(texts.HOME_DROP_HINT)
         drop_hint.setProperty("role", "hint")
         drop_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        bottom = QHBoxLayout()
-        bottom.addStretch(1)
-        bottom.addWidget(paste)
-        bottom.addStretch(1)
-
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 28, 40, 30)
-        layout.setSpacing(18)
+        layout.setContentsMargins(32, 22, 32, 22)
+        layout.setSpacing(14)
         layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignHCenter)
         layout.addLayout(grid, stretch=1)
-        layout.addLayout(bottom)
         layout.addWidget(drop_hint)
         return page
 
@@ -190,8 +207,13 @@ class MainWindow(QMainWindow):
         return Path.home() / "Documents"
 
     # ── 页面跳转 ────────────────────────────────────────────────
-    def open_print(self, files: list[Path], enhance: EnhanceOptions | None = None) -> None:
-        self._print_page.load([Path(f) for f in files], enhance)
+    def open_print(
+        self,
+        files: list[Path],
+        enhance: EnhanceOptions | None = None,
+        actual_size: bool = False,
+    ) -> None:
+        self._print_page.load([Path(f) for f in files], enhance, actual_size)
         self._stack.setCurrentIndex(_PAGE_PRINT)
 
     def _print_with_enhance(self, files: list, options: object) -> None:
@@ -210,6 +232,11 @@ class MainWindow(QMainWindow):
         self._new_count = 0
         self._card_inbox.set_badge(0)
         self._stack.setCurrentIndex(_PAGE_INBOX)
+
+    def open_cards(self, sources: Path | list[Path] | None = None) -> None:
+        """证件二合一。带路径时把图片放进空位（一张或两张都行）。"""
+        self._cards_page.load(sources)
+        self._stack.setCurrentIndex(_PAGE_CARDS)
 
     def _open_settings(self) -> None:
         from .settings_dialog import SettingsDialog

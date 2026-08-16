@@ -76,6 +76,11 @@ class PrintSettings:
     dpi: int = 300  # 600dpi 下 A4 灰度约 70MB/页，弱机器吃不消
     page_range: tuple[int, int] | None = None  # 1 起、含两端；None = 全部
     job_name: str = "打印助手"
+    # **按实物尺寸 1:1 打**，不缩到可打印区。证件复印必须开这个：
+    # 默认的"缩放到可打印区"会把整页按可打印区/纸张的比例缩小（真打印机四周
+    # 有 4–5mm 打不到的边，也就是缩掉约 4%），身份证就从 85.6mm 变成 82mm 了。
+    # 代价是超出可打印区的部分会被裁掉 —— 证件排版本来就留了 6mm 安全边。
+    actual_size: bool = False
     # 把输出重定向到文件。给「Microsoft Print to PDF」这类虚拟打印机用：
     # 不填它会弹"另存为"对话框，填了就直接写文件、不弹窗。
     # 开发机上没有柯美 225i，全链路验证就靠这个。
@@ -83,6 +88,18 @@ class PrintSettings:
 
 
 ProgressCallback = Callable[[int, int], None]  # (当前页, 总页数)
+
+
+@dataclass
+class _DeviceMetrics:
+    """打印机 DC 的物理量。按实物尺寸打印时全靠这几个数。"""
+
+    dpi_x: int
+    dpi_y: int
+    offset_x: int  # 可打印区左上角到纸张左上角的距离（像素）
+    offset_y: int
+    printable_w: int
+    printable_h: int
 
 
 def _require_win32() -> None:
@@ -266,6 +283,14 @@ def print_pdf(
         dc = win32ui.CreateDCFromHandle(hdc)
         printable_w = dc.GetDeviceCaps(win32con.HORZRES)
         printable_h = dc.GetDeviceCaps(win32con.VERTRES)
+        device = _DeviceMetrics(
+            dpi_x=dc.GetDeviceCaps(win32con.LOGPIXELSX),
+            dpi_y=dc.GetDeviceCaps(win32con.LOGPIXELSY),
+            offset_x=dc.GetDeviceCaps(win32con.PHYSICALOFFSETX),
+            offset_y=dc.GetDeviceCaps(win32con.PHYSICALOFFSETY),
+            printable_w=printable_w,
+            printable_h=printable_h,
+        )
 
         started = False
         try:
@@ -275,9 +300,13 @@ def print_pdf(
                 dc.StartDoc(conf.job_name)
             started = True
             for ordinal, index in enumerate(indexes, start=1):
+                page_rect = doc[index].rect
                 image = _render_for_device(doc, index, conf.dpi, device_landscape)
                 dc.StartPage()
-                _draw_fitted(dc, image, printable_w, printable_h)
+                if conf.actual_size:
+                    _draw_actual_size(dc, image, page_rect, device_landscape, device)
+                else:
+                    _draw_fitted(dc, image, printable_w, printable_h)
                 dc.EndPage()
                 if on_progress:
                     on_progress(ordinal, len(indexes))
@@ -299,7 +328,7 @@ def print_pdf(
 
 
 def _draw_fitted(dc, image: Image.Image, printable_w: int, printable_h: int) -> None:
-    """等比缩放居中画到可打印区域。
+    """等比缩放居中画到可打印区域。普通文档走这条：宁可整体缩一点，也别裁掉边。
 
     打印机 DC 的原点就在可打印区左上角，所以不用再加 PHYSICALOFFSET；
     但**可打印区不等于纸张尺寸**，必须用 HORZRES/VERTRES 而不是纸张点数，
@@ -312,3 +341,39 @@ def _draw_fitted(dc, image: Image.Image, printable_w: int, printable_h: int) -> 
     top = (printable_h - height) // 2
     dib = ImageWin.Dib(image)
     dib.draw(dc.GetHandleOutput(), (left, top, left + width, top + height))
+
+
+def _draw_actual_size(
+    dc,
+    image: Image.Image,
+    page_rect,
+    device_landscape: bool,
+    device: _DeviceMetrics,
+) -> None:
+    """按 PDF 页面的**物理尺寸** 1:1 画。证件复印走这条。
+
+    关键是坐标原点：打印机 DC 的 (0,0) 在**可打印区**左上角，而它距离纸张
+    左上角有 PHYSICALOFFSET 那么远。所以要把页面画在 (-offset) 处，
+    页面的 1mm 才正好落在纸的 1mm 上。超出可打印区的部分由驱动裁掉 ——
+    证件排版留了 6mm 安全边，正常不会裁到内容。
+    """
+    width_pt, height_pt = float(page_rect.width), float(page_rect.height)
+    if (width_pt > height_pt) != device_landscape:
+        width_pt, height_pt = height_pt, width_pt  # 渲染时转过 90°，物理宽高也跟着换
+    width = max(1, round(width_pt / 72.0 * device.dpi_x))
+    height = max(1, round(height_pt / 72.0 * device.dpi_y))
+
+    超出 = (
+        width - device.offset_x > device.printable_w + device.offset_x
+        or height - device.offset_y > device.printable_h + device.offset_y
+    )
+    if 超出:
+        logger.warning(
+            "按实物尺寸打印时页面比纸大（页面 %d×%d px，可打印区 %d×%d px），边缘会被裁掉",
+            width,
+            height,
+            device.printable_w,
+            device.printable_h,
+        )
+    left, top = -device.offset_x, -device.offset_y
+    ImageWin.Dib(image).draw(dc.GetHandleOutput(), (left, top, left + width, top + height))

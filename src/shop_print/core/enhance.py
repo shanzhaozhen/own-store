@@ -151,11 +151,18 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     return ordered
 
 
-def detect_page_quad(image: np.ndarray) -> np.ndarray | None:
+def detect_page_quad(
+    image: np.ndarray,
+    min_area_ratio: float = _MIN_QUAD_AREA_RATIO,
+    ratio_range: tuple[float, float] | None = None,
+) -> np.ndarray | None:
     """在缩略图上找纸张的四个角，返回原图坐标系下的四点；找不到返回 None。
 
     宁可不裁也不能裁坏 —— 长辈没法判断"这张是不是被裁错了"，
     所以判据故意保守：必须是凸四边形、占面积够大、四角接近直角。
+
+    两个参数是给证件二合一用的（`core/cards.py`）：卡片在照片里占的面积比整页
+    文档小得多，而且长宽比是已知的，所以那边会放宽面积、收紧长宽比。
     """
     small = downscale(image, 900)
     scale = image.shape[1] / small.shape[1]
@@ -171,7 +178,7 @@ def detect_page_quad(image: np.ndarray) -> np.ndarray | None:
 
     for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:8]:
         area = cv2.contourArea(contour)
-        if area < small_area * _MIN_QUAD_AREA_RATIO:
+        if area < small_area * min_area_ratio:
             break  # 后面的更小，不用看了
         approx = cv2.approxPolyDP(contour, 0.02 * cv2.arcLength(contour, True), True)
         if len(approx) != 4 or not cv2.isContourConvex(approx):
@@ -179,8 +186,21 @@ def detect_page_quad(image: np.ndarray) -> np.ndarray | None:
         quad = _order_quad(approx)
         if not _has_right_angles(quad):
             continue
+        if ratio_range is not None and not _ratio_within(quad, ratio_range):
+            continue
         return quad * scale
     return None
+
+
+def _ratio_within(quad: np.ndarray, ratio_range: tuple[float, float]) -> bool:
+    """四边形的长宽比在范围内。用来排除"整张桌子"这类误检。"""
+    tl, tr, br, bl = quad
+    width = max(float(np.linalg.norm(tr - tl)), float(np.linalg.norm(br - bl)))
+    height = max(float(np.linalg.norm(bl - tl)), float(np.linalg.norm(br - tr)))
+    if min(width, height) < 1e-6:
+        return False
+    ratio = max(width, height) / min(width, height)
+    return ratio_range[0] <= ratio <= ratio_range[1]
 
 
 def _has_right_angles(quad: np.ndarray, tolerance_deg: float = 25.0) -> bool:

@@ -56,6 +56,7 @@ class FileCard(QFrame):
     printRequested = Signal(object)
     enhanceRequested = Signal(object)
     ocrRequested = Signal(object)
+    cardRequested = Signal(object)
 
     def __init__(self, source: intake.SourceFile, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -91,6 +92,9 @@ class FileCard(QFrame):
             enhance_button = QPushButton("变清楚再打印")
             enhance_button.clicked.connect(lambda: self.enhanceRequested.emit(self._source))
             layout.addWidget(enhance_button)
+            card_button = QPushButton("证件拼一张")
+            card_button.clicked.connect(lambda: self.cardRequested.emit(self._source))
+            layout.addWidget(card_button)
             ocr_button = QPushButton("转文字")
             ocr_button.clicked.connect(lambda: self.ocrRequested.emit(self._source))
             layout.addWidget(ocr_button)
@@ -102,6 +106,7 @@ class InboxPage(SubPage):
     printRequested = Signal(list)
     enhanceRequested = Signal(object)
     ocrRequested = Signal(object)
+    cardRequested = Signal(object)
     pasteRequested = Signal()
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
@@ -175,6 +180,7 @@ class InboxPage(SubPage):
             card.printRequested.connect(lambda s: self.printRequested.emit([s.path]))
             card.enhanceRequested.connect(lambda s: self.enhanceRequested.emit(s.path))
             card.ocrRequested.connect(lambda s: self.ocrRequested.emit(s.path))
+            card.cardRequested.connect(lambda s: self.cardRequested.emit(s.path))
             self._list_layout.addWidget(card)
         self._list_layout.addStretch(1)
 

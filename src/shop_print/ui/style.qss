@@ -13,6 +13,7 @@ QLabel[role="title"]   { font-size: 26pt; font-weight: bold; }
 QLabel[role="hint"]    { font-size: 14pt; color: #5c6672; }
 QLabel[role="status"]  { font-size: 20pt; font-weight: bold; }
 QLabel[role="ok"]      { font-size: 24pt; font-weight: bold; color: #1a9c3c; }
+QLabel[role="ok-small"] { font-size: 15pt; color: #1a9c3c; }
 QLabel[role="warn"]    { font-size: 16pt; color: #c8460f; }
 QLabel[role="section"] { font-size: 17pt; font-weight: bold; }
 
@@ -79,6 +80,14 @@ QPushButton[role="choice"]:checked {
     background: #1677ff;
     color: #ffffff;
     border-color: #1677ff;
+}
+
+/* 证件页那两行「选图片 / 粘贴」：比普通按钮矮一点，好让 A4 预览多占地方。
+   仍然满足硬性要求：可点高度 ≥44px、文字 ≥18pt。 */
+QPushButton[role="slot"] {
+    min-height: 52px;
+    font-size: 18pt;
+    padding: 8px 16px;
 }
 
 /* 卡片和预览框里的文字必须透明背景：上面那条 QWidget 规则会给每个 QLabel

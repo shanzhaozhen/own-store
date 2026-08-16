@@ -29,6 +29,7 @@ class PrintPage(SubPage):
         self._config = config
         self._sources: list[Path] = []
         self._enhance: EnhanceOptions | None = None
+        self._actual_size = False
         self._pdf: Path | None = None
         self._pages = 0
 
@@ -50,6 +51,11 @@ class PrintPage(SubPage):
         self._printer_label.setProperty("role", "hint")
         self._color_hint = QLabel(texts.LABEL_COLOR_DISABLED)
         self._color_hint.setProperty("role", "hint")
+        # 只有证件二合一那条路会显示：告诉长辈这一张是按实物尺寸打的
+        self._size_hint = QLabel(texts.PRINT_ACTUAL_SIZE)
+        self._size_hint.setProperty("role", "ok-small")
+        self._size_hint.setWordWrap(True)
+        self._size_hint.hide()
 
         self._print_button = PrimaryButton(texts.BTN_START_PRINT)
         self._print_button.setEnabled(False)
@@ -63,6 +69,7 @@ class PrintPage(SubPage):
         controls.addLayout(self._row(texts.LABEL_PAPER, self._paper))
         controls.addWidget(self._printer_label)
         controls.addWidget(self._color_hint)
+        controls.addWidget(self._size_hint)
         controls.addStretch(1)
 
         middle = QHBoxLayout()
@@ -96,19 +103,29 @@ class PrintPage(SubPage):
         )
 
     # ── 外部入口 ────────────────────────────────────────────────
-    def load(self, files: list[Path], enhance: EnhanceOptions | None = None) -> None:
+    def load(
+        self,
+        files: list[Path],
+        enhance: EnhanceOptions | None = None,
+        actual_size: bool = False,
+    ) -> None:
         """接收要打印的文件。多张图片会合成一份 PDF，一张一页。
 
         enhance 不为空时图片会先过去底增强 —— 「照片变清楚再打印」走这条路，
         全分辨率处理在这里才做（预览阶段只用缩略图）。
+
+        actual_size=True 时按物理尺寸 1:1 打，不缩到可打印区 ——
+        证件二合一走这条，尺寸缩了复印件就作废了。
         """
         self._sources = [Path(f) for f in files]
         self._enhance = enhance
+        self._actual_size = actual_size
         self._pdf = None
         self._pages = 0
         self._print_button.setEnabled(False)
         self._preview.set_total(0)
         self._refresh_printer_label()
+        self._size_hint.setVisible(actual_size)
 
         if not self._sources:
             self._file_label.setText("")
@@ -164,6 +181,7 @@ class PrintPage(SubPage):
             duplex=self._sides.current() == "double",
             paper=self._paper.current(),
             dpi=self._config.printing.dpi,
+            actual_size=self._actual_size,
             job_name=self._sources[0].name if self._sources else "打印助手",
         )
         self.show_progress(0, self._pages, texts.printing_progress(0, self._pages))

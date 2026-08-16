@@ -135,3 +135,76 @@ def photographed_text_document(seed: int = 0, shadow: float = 0.5) -> np.ndarray
     """
     gray = add_noise(add_paper_tint(add_shadow(text_document(), strength=shadow)), seed=seed)
     return np.dstack([gray, gray, gray])
+
+
+def card_photo(
+    width_mm: float = 85.6,
+    height_mm: float = 54.0,
+    *,
+    px_per_mm: float = 11.0,
+    margin: int = 120,
+    tilt: float = 0.0,
+    seed: int = 0,
+    portrait: bool = False,
+) -> np.ndarray:
+    """合成一张"桌面上的证件照片"：深色桌面上一张浅色卡片，卡片上有字和头像框。
+
+    用来验证证件二合一那条链路：抠卡片 → 透视校正 → 按长宽比认出尺寸 →
+    按毫米摆到纸上。`px_per_mm` 只影响卡片在照片里的像素大小，
+    **算法不该依赖它** —— 手机照片里没有"每毫米多少像素"这个信息。
+    """
+    import cv2
+
+    # portrait 的含义是"照片里卡片是竖着的"（长边朝上），传进来的两个尺寸谁大谁小都行
+    if portrait == (width_mm > height_mm):
+        width_mm, height_mm = height_mm, width_mm
+    card_w = max(40, round(width_mm * px_per_mm))
+    card_h = max(40, round(height_mm * px_per_mm))
+    canvas_w, canvas_h = card_w + margin * 2, card_h + margin * 2
+
+    rng = np.random.default_rng(seed)
+    desk = np.full((canvas_h, canvas_w), 90, dtype=np.uint8)  # 深色桌面，和卡片有明显反差
+    desk = add_noise(desk, sigma=3.0, seed=seed)
+
+    card = Image.new("L", (card_w, card_h), 236)
+    draw = ImageDraw.Draw(card)
+    # 头像框 + 几行字，让卡片内部有内容（不然抠出来是一片纯色，看不出效果）
+    draw.rectangle(
+        [int(card_w * 0.06), int(card_h * 0.18), int(card_w * 0.30), int(card_h * 0.82)], fill=150
+    )
+    line_h = max(2, card_h // 22)
+    y = int(card_h * 0.22)
+    while y < card_h * 0.8:
+        right = int(card_w * rng.uniform(0.6, 0.94))
+        draw.rectangle([int(card_w * 0.36), y, right, y + line_h], fill=40)
+        y += line_h * 3
+
+    patch = np.array(card)
+    if tilt:
+        patch = _rotate_keep(patch, tilt, fill=236)
+        card_h, card_w = patch.shape[:2]
+
+    top, left = (canvas_h - card_h) // 2, (canvas_w - card_w) // 2
+    if tilt:
+        # 旋转后的四角是背景色，用掩膜只贴卡片本体
+        mask = _rotate_keep(np.full((card.height, card.width), 255, np.uint8), tilt, fill=0)
+        region = desk[top : top + card_h, left : left + card_w]
+        desk[top : top + card_h, left : left + card_w] = np.where(mask > 127, patch, region)
+    else:
+        desk[top : top + card_h, left : left + card_w] = patch
+
+    dirty = add_noise(add_paper_tint(add_shadow(desk, strength=0.3), amount=0.06), seed=seed)
+    return cv2.cvtColor(dirty, cv2.COLOR_GRAY2BGR)
+
+
+def _rotate_keep(gray: np.ndarray, degrees: float, fill: int) -> np.ndarray:
+    """旋转并扩大画布装下全图，空白补 fill。"""
+    import cv2
+
+    h, w = gray.shape[:2]
+    matrix = cv2.getRotationMatrix2D((w / 2.0, h / 2.0), degrees, 1.0)
+    cos, sin = abs(matrix[0, 0]), abs(matrix[0, 1])
+    new_w, new_h = int(h * sin + w * cos), int(h * cos + w * sin)
+    matrix[0, 2] += new_w / 2.0 - w / 2.0
+    matrix[1, 2] += new_h / 2.0 - h / 2.0
+    return cv2.warpAffine(gray, matrix, (new_w, new_h), flags=cv2.INTER_CUBIC, borderValue=fill)

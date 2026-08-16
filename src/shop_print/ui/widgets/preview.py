@@ -86,7 +86,13 @@ class ImagePreview(QFrame):
     def _rescale(self) -> None:
         if self._pixmap is None or self._pixmap.isNull():
             return
-        target = self._label.size()
+        # 按**外框**的可用尺寸缩放，不用 label 的尺寸：label 的几何可能还是上一轮
+        # 布局的旧值（刚 setPixmap 时尤其如此），照旧值缩会画出比框还大的图，
+        # 看起来就像图片糊到下面的按钮上。
+        margins = self.contentsMargins()
+        layout = self.layout()
+        extra = layout.contentsMargins() if layout is not None else margins
+        target = self.size().shrunkBy(margins).shrunkBy(extra)
         if target.width() < 8 or target.height() < 8:
             return
         self._label.setPixmap(

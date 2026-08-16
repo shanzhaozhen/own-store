@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
-from tests.synth import photographed_text_document  # noqa: E402
+from tests.synth import card_photo, photographed_text_document  # noqa: E402
 
 from shop_print import config as config_mod  # noqa: E402
 from shop_print import paths  # noqa: E402
@@ -64,6 +64,12 @@ def main() -> int:
     enhance_mod.save_image(photographed_text_document(), sample)
     _enhance_comparison(sample)
 
+    # 证件二合一要两张：合成一张"桌面上的身份证"照片，正反两面各一张
+    card_front = sample_dir / "身份证-人像面.png"
+    card_back = sample_dir / "身份证-国徽面.png"
+    enhance_mod.save_image(card_photo(seed=1)[:, :, 0], card_front)
+    enhance_mod.save_image(card_photo(seed=2)[:, :, 0], card_back)
+
     app = QApplication(sys.argv)
     app.setStyleSheet(paths.style_file().read_text(encoding="utf-8"))
 
@@ -83,10 +89,13 @@ def main() -> int:
         ("打印文档", lambda: window.open_print([sample])),
         ("照片变清楚", lambda: window.open_photo(sample)),
         ("照片转文字", lambda: window.open_ocr(sample)),
+        ("证件二合一", lambda: window.open_cards([card_front, card_back])),
         ("微信收到的文件", window.open_inbox),
     ):
         action()
         _settle(app)
+        window.repaint()  # 后台线程刚更新完预览，先重画一次再截，免得截到画一半的界面
+        _settle(app, steps=4)
         window.grab().save(str(OUT / f"{name}.png"))
         print(f"已截图 {name}.png")
 
@@ -99,7 +108,7 @@ def main() -> int:
 
     window.close()  # closeEvent 里会停掉目录监控
     _settle(app, steps=10)
-    for path in [*demo, sample]:
+    for path in [*demo, sample, card_front, card_back]:
         path.unlink(missing_ok=True)
     print(f"输出目录：{OUT}")
     return 0

@@ -53,11 +53,21 @@ class IntakeConfig:
 
 
 @dataclass
+class CardsConfig:
+    """证件二合一（身份证正反面、户口本两页拼一张纸）。见 docs/10-证件二合一.md。"""
+
+    default_type: str = "id"  # 默认证件类型，见 core/cards.PRESETS 的 key；auto = 自动认
+    gap_mm: float = 10.0  # 两张之间的间隔，留一点好剪
+    strength: int = 45  # 去底强度。证件有头像和底纹，比纯文字要淡一点
+
+
+@dataclass
 class AppConfig:
     enhance: EnhanceConfig = field(default_factory=EnhanceConfig)
     printing: PrintConfig = field(default_factory=PrintConfig)
     ocr: OcrConfig = field(default_factory=OcrConfig)
     intake: IntakeConfig = field(default_factory=IntakeConfig)
+    cards: CardsConfig = field(default_factory=CardsConfig)
 
 
 _SECTIONS = {f.name: f.type for f in fields(AppConfig)}
@@ -108,6 +118,7 @@ def load() -> AppConfig:
         printing=_build_section(PrintConfig, raw.get("printing")),
         ocr=_build_section(OcrConfig, raw.get("ocr")),
         intake=_build_section(IntakeConfig, raw.get("intake")),
+        cards=_build_section(CardsConfig, raw.get("cards")),
     )
 
 

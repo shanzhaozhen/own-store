@@ -23,6 +23,10 @@ HOME_CARD_OCR_TITLE = "照片转成文字文档"
 HOME_CARD_OCR_HINT = "转成可以修改的 Word"
 HOME_CARD_INBOX_TITLE = "微信收到的文件"
 HOME_CARD_INBOX_HINT = "新收到的文件会自动出现在这里"
+HOME_CARD_CARDS_TITLE = "证件印一张纸"
+HOME_CARD_CARDS_HINT = "身份证正反面、户口本两页"
+HOME_CARD_PASTE_TITLE = "粘贴刚复制的图片"
+HOME_CARD_PASTE_HINT = "在微信里右键复制，回来点这个"
 HOME_DROP_HINT = "或者把文件直接拖进来"
 
 # ── 通用按钮 ──────────────────────────────────────────────────────
@@ -44,6 +48,7 @@ SIDES_DOUBLE = "双面"
 LABEL_PAPER = "纸张"
 LABEL_COLOR_DISABLED = "本店打印机只有黑白"
 LABEL_PRINTER = "打印机"
+PRINT_ACTUAL_SIZE = "这一张按证件的实际大小打，不缩放"
 
 # ── 照片增强页 ────────────────────────────────────────────────────
 MODE_AUTO = "自动"
@@ -60,6 +65,20 @@ STRENGTH_HEAVY = "浓"
 STRENGTH_HINT = "字太淡就往右拉，背景发脏就往左拉"
 LABEL_BEFORE = "原来的"
 LABEL_AFTER = "处理后"
+
+# ── 证件二合一页 ──────────────────────────────────────────────────
+CARDS_TITLE = "证件印一张纸"
+CARDS_TYPE_LABEL = "这是什么证件"
+CARDS_TYPE_AUTO = "自动认"
+CARDS_TYPE_AUTO_HINT = "认不准的时候自己点上面的类型"
+CARDS_PICK = "选图片"
+CARDS_PASTE = "粘贴"
+CARDS_CLEAR = "去掉"
+CARDS_SLOT_EMPTY = "还没有选图片"
+CARDS_HINT = "两张都选好才能打印。证件会按实际大小印，不用调"
+CARDS_NEED_TWO = "还差一张：{}"
+CARDS_SAVE_PDF = "保存成 PDF"
+BUSY_CARDS = "正在处理证件照片，请稍等…"
 
 # ── 进度与结果（要又大又明确）────────────────────────────────────
 BUSY_PROCESSING = "正在处理，请稍等…"

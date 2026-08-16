@@ -266,3 +266,104 @@ def test_双面能力问不出来时不擅自改成单面(屏蔽驱动噪音) ->
     虚拟打印机上这个查询经常失败，正好用来验这条兜底。"""
     答案 = printing.duplex_support(替身打印机)
     assert 答案 in (True, False, None)
+
+
+# ── 按实物尺寸打印（证件复印靠这条）──────────────────────────────
+class _假纸:
+    """假的可打印区信息。真打印机四周有 4–5mm 打不到的边，虚拟打印机没有，
+    所以这条只能靠假数据验 —— 真机行为要到店铺现场确认。"""
+
+    def __init__(self, dpi: int = 600, offset: int = 100) -> None:
+        self.metrics = printing._DeviceMetrics(  # noqa: SLF001
+            dpi_x=dpi,
+            dpi_y=dpi,
+            offset_x=offset,
+            offset_y=offset,
+            printable_w=round(210 / 25.4 * dpi) - 2 * offset,
+            printable_h=round(297 / 25.4 * dpi) - 2 * offset,
+        )
+
+
+def _画到哪(monkeypatch, image, page_rect, landscape: bool, 纸: _假纸):
+    画到 = {}
+
+    class _假Dib:
+        def __init__(self, img):
+            self.img = img
+
+        def draw(self, _handle, rect):
+            画到["rect"] = rect
+
+    monkeypatch.setattr(printing.ImageWin, "Dib", _假Dib)
+    printing._draw_actual_size(_假DC(), image, page_rect, landscape, 纸.metrics)  # noqa: SLF001
+    return 画到["rect"]
+
+
+def test_实物尺寸模式下A4页就是A4大小(monkeypatch) -> None:
+    """600dpi 下 A4 = 4961×7016 像素。缩到可打印区会变成 4761×6816，
+    身份证就从 85.6mm 缩成 82mm —— 所以证件那条路不许缩。"""
+    from PIL import Image
+
+    纸 = _假纸()
+    rect = pymupdf.Rect(0, 0, 595.276, 841.89)  # A4 纵向
+    left, top, right, bottom = _画到哪(monkeypatch, Image.new("L", (2480, 3508)), rect, False, 纸)
+    assert right - left == pytest.approx(4961, abs=2)
+    assert bottom - top == pytest.approx(7016, abs=2)
+
+
+def test_实物尺寸模式要补上不可打印的边(monkeypatch) -> None:
+    """DC 的原点在可打印区左上角，比纸张左上角偏了 offset。
+    不把这段补回来，整页就整体偏移 4mm。"""
+    from PIL import Image
+
+    纸 = _假纸(offset=100)
+    rect = pymupdf.Rect(0, 0, 595.276, 841.89)
+    left, top, _, _ = _画到哪(monkeypatch, Image.new("L", (2480, 3508)), rect, False, 纸)
+    assert (left, top) == (-100, -100)
+
+
+def test_横向页在实物尺寸下宽高要换过来(monkeypatch) -> None:
+    """纵向页打在横向纸上时渲染阶段会转 90°，物理宽高也得跟着换。"""
+    from PIL import Image
+
+    纸 = _假纸()
+    rect = pymupdf.Rect(0, 0, 595.276, 841.89)  # 纵向页
+    left, top, right, bottom = _画到哪(monkeypatch, Image.new("L", (3508, 2480)), rect, True, 纸)
+    assert right - left == pytest.approx(7016, abs=2)  # 转过来之后长边在横向
+    assert bottom - top == pytest.approx(4961, abs=2)
+
+
+def test_默认不开实物尺寸() -> None:
+    """普通文档要缩到可打印区，不然边上的内容会被裁掉。"""
+    assert printing.PrintSettings().actual_size is False
+
+
+@needs_pdf_printer
+def test_实打证件PDF_按实物尺寸(tmp_path, 屏蔽驱动噪音) -> None:
+    """整条链路：证件合并 → 按实物尺寸打 → 输出 PDF 里量毫米。
+
+    「Microsoft Print to PDF」的可打印区正好等于纸张（offset=0），所以这里
+    量出来应当就是 85.6mm。**真打印机有 4–5mm 打不到的边，行为要到店铺机上再验。**
+    """
+    import numpy as np
+
+    from shop_print.core import cards
+
+    items = [
+        cards.CardItem(
+            image=np.full((540, 856), 210, dtype=np.uint8), width_mm=85.6, height_mm=54.0
+        )
+        for _ in range(2)
+    ]
+    src, _ = cards.merge_to_pdf(items, tmp_path / "证件.pdf")
+    out = tmp_path / "打出来的证件.pdf"
+    printing.print_pdf(
+        src,
+        printing.PrintSettings(printer=替身打印机, dpi=200, actual_size=True, output_file=out),
+    )
+
+    with pymupdf.open(out) as doc:
+        page = doc[0]
+        assert page.rect.width / cards.PT_PER_MM == pytest.approx(210, abs=1)
+        # 打印是整页光栅化，量不出单张卡片的框；改为量整页有没有被缩
+        assert page.get_image_info()[0]["bbox"][2] / cards.PT_PER_MM == pytest.approx(210, abs=1)
