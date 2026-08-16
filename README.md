@@ -115,12 +115,19 @@ src/shop_print/
 
 ```powershell
 .\scripts\setup-dev.ps1                         # 建 venv + 装依赖（会把 opencv 换回 headless）
-.\.venv\Scripts\Activate.ps1
 
-python -m shop_print                            # 启动界面
-python -m shop_print.core.enhance <图片路径>     # 增强算法命令行调试，输出前后对比图
-ruff check . ; ruff format . ; pytest -q
-python scripts\make_screenshots.py              # 重新生成 README / docs 里的插图
+.\scripts\运行.bat                               # 启动界面（双击也行）
+.\scripts\运行.bat -SelfCheck                    # 不开界面，出一份自检报告
+.\.venv\Scripts\python.exe -m shop_print         # 同上，手敲版
+```
+
+其它常用的：
+
+```powershell
+.\.venv\Scripts\python.exe -m shop_print.core.enhance <图片路径>   # 去底算法调试，输出前后对比图
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check . ; .\.venv\Scripts\python.exe -m ruff format .
+.\.venv\Scripts\python.exe scripts\make_screenshots.py            # 重新生成 README / docs 插图
 ```
 
 测试 203 个，其中标了 `needs_office` / `needs_printer` / `needs_samples` 的需要本机有 Office、打印机或 OCR 模型。判据刻意写成**方向性的性质**（背景该变白、文字该保持黑、滑块该单调有效），而不是像素级快照 —— 否则调参天天挂测试。物理尺寸例外：`tests/test_physical_size.py` 直接量毫米，因为"打出来必须是实物大小"是硬要求。
@@ -128,10 +135,12 @@ python scripts\make_screenshots.py              # 重新生成 README / docs 里
 ## 打包与部署
 
 ```powershell
-.\scripts\prepare-models.ps1     # 把 RapidOCR 的模型拷进 assets（~30 MB，不进 git）
-python scripts\make_icon.py      # 生成 app.ico
-.\scripts\build.ps1              # PyInstaller --onedir，产物 dist\打印助手\（约 414 MB）
+.\scripts\打包.bat               # 一键：ruff → pytest → 拷 OCR 模型 → 生成图标 → PyInstaller
+.\scripts\打包.bat -Clean        # 换过依赖 / 改过 add-data 时用
+.\scripts\运行.bat -Packaged     # 跑一次打包产物，确认不是靠 .venv 才能起来
 ```
+
+产物在 `dist\打印助手\`（约 414 MB，`--onedir`）。模型和图标都不进 git，所以打包脚本把"准备资源"也串进去了 —— 换台机器 clone 下来直接 build 会打出一个「没有 OCR 模型」的产物，而这种产物在开发机上一眼看不出问题，到店铺机点「照片转文字」才炸。
 
 装到店铺机：双击 `scripts\安装到店铺电脑.bat` —— 拷到 `C:\ShopPrint\`（旧版本自动改名留着好回滚）、公共桌面放「打印助手」和「待打印」两个图标、可选开机自启。
 

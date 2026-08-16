@@ -71,8 +71,9 @@ src/shop_print/
   paths.py  所有路径（缓存、日志、待打印目录、样式表、模型）统一在此定义，不要散落硬编码
   config.py 配置读写，落在 %LOCALAPPDATA%\ShopPrint\config.json
 docs/       知识库，见 docs/README.md 索引
-scripts/    setup-dev.ps1 装环境、prepare-models.ps1 拷 OCR 模型、make_icon.py 生成图标、
-            build.ps1 打包（入口是 launcher.py，不是 __main__.py）、
+scripts/    setup-dev.ps1 装环境、运行.bat + run.ps1 启动、打包.bat + pack.ps1 一键打包
+            （pack 串起 ruff → pytest → prepare-models.ps1 → make_icon.py → build.ps1，
+             入口是 launcher.py 不是 __main__.py）、
             安装到店铺电脑.bat + install-to-shop.ps1、采集店铺环境.bat + collect-shop-env.ps1
 samples/    真实拍照样张，调参与回归测试基准
 tests/      conftest.py 会把 %LOCALAPPDATA% 重定向到临时目录，别往真实数据目录写
@@ -85,14 +86,15 @@ tests/      conftest.py 会把 %LOCALAPPDATA% 重定向到临时目录，别往�
 
 ```powershell
 .\scripts\setup-dev.ps1            # 建 venv + 装依赖 + 把 opencv 换回 headless
-.\.venv\Scripts\Activate.ps1
 
-python -m shop_print              # 启动界面
-python -m shop_print.core.enhance <图片路径>   # 增强算法命令行调试
-ruff check . ; ruff format .
-pytest -q
-.\scripts\prepare-models.ps1      # 打包前：拷 OCR 模型进 assets
-.\scripts\build.ps1               # 打包到 dist\打印助手\
+.\scripts\运行.bat                  # 启动界面（= python -m shop_print，双击也行）
+.\scripts\运行.bat -SelfCheck       # 不开界面，出自检报告
+.\scripts\运行.bat -Packaged        # 跑打包产物
+.\scripts\打包.bat                  # 一键打包：ruff → pytest → 模型 → 图标 → PyInstaller
+
+.\.venv\Scripts\python.exe -m shop_print.core.enhance <图片路径>   # 增强算法命令行调试
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check . ; .\.venv\Scripts\python.exe -m ruff format .
 ```
 
 ## 改完代码必须做的验证

@@ -36,6 +36,14 @@ if ($Clean) {
     }
 }
 
+# 产物还在运行的话，PyInstaller 会因为文件被占用失败，报的是看不懂的
+# 「PermissionError: [WinError 5] 拒绝访问 ... _internal\cv2\cv2.pyd」。
+# 先说清楚，省得对着这行错误发愁。
+$在跑 = Get-Process -Name '打印助手' -ErrorAction SilentlyContinue
+if ($在跑) {
+    throw "「打印助手」正在运行（PID $($在跑.Id -join ', ')），先关掉它再打包 —— 不然产物文件被占用，PyInstaller 会报「拒绝访问」"
+}
+
 $assets = Join-Path $root 'src\shop_print\assets'
 $qss = Join-Path $root 'src\shop_print\ui\style.qss'
 $icon = Join-Path $assets 'icons\app.ico'
