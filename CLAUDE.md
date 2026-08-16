@@ -27,7 +27,7 @@ v1 解决五件事：
 | Office | Microsoft Office 2016+ `C:\Program Files\Microsoft Office\Root\Office16\` | Microsoft Office |
 | 打印机 | 只有虚拟打印机（Adobe PDF、Microsoft Print to PDF） | **柯美 bizhub 225i，只能黑白** |
 | 微信 | 客户端 4.1.11.24（`Weixin.exe`），但目录是 3.x 布局 `Documents\WeChat Files\wxid_xxx\FileStorage\` | 待现场确认 3.x / 4.x |
-| 分辨率 | 1920×1080 | 待确认 |
+| 分辨率 | 3440×1440（缩放 100%）—— 开发机是超宽屏，**别按它调布局** | 待确认 |
 
 **当前机器不是店铺机。**涉及柯美 225i 的真实行为、店铺的微信版本、店铺屏幕分辨率，在本机都无法验证 —— 相关代码要写成可配置 + 有降级路径，并在报告里明确说"这部分未能在真机验证"。
 
