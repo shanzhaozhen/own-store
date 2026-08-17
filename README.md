@@ -131,7 +131,7 @@ src/shop_print/
 .\.venv\Scripts\python.exe scripts\make_screenshots.py            # 重新生成 README / docs 插图
 ```
 
-测试 219 个，其中标了 `needs_office` / `needs_printer` / `needs_samples` 的需要本机有 Office、打印机或 OCR 模型。判据刻意写成**方向性的性质**（背景该变白、文字该保持黑、滑块该单调有效），而不是像素级快照 —— 否则调参天天挂测试。两处例外：`tests/test_physical_size.py` 直接量毫米（"打出来必须是实物大小"是硬要求），`tests/test_ocr_layout.py` 量文本框坐标（"排版还在"是硬要求）。
+测试 235 个，其中标了 `needs_office` / `needs_printer` / `needs_samples` 的需要本机有 Office、打印机或 OCR 模型。判据刻意写成**方向性的性质**（背景该变白、文字该保持黑、滑块该单调有效），而不是像素级快照 —— 否则调参天天挂测试。两处例外：`tests/test_physical_size.py` 直接量毫米（"打出来必须是实物大小"是硬要求），`tests/test_ocr_layout.py` 量文本框坐标（"排版还在"是硬要求）。
 
 
 ## 打包与部署
@@ -156,7 +156,7 @@ src/shop_print/
 
 ## 当前状态
 
-代码全部写完，`ruff` 干净、219 个测试通过，开发机上打包并实测通过（窗口 1.5 秒出来、OCR 一张 2.9 秒、自检全过）。
+代码全部写完，`ruff` 干净、235 个测试通过，开发机上打包并实测通过（窗口 1.5 秒出来、OCR 一张 2.9 秒、自检全过）。
 
 还没做的：**店铺机实测**（柯美 225i 的双面 / A3 / 实际画质，以及证件打出来驱动有没有照着 PDF 的尺寸走），以及**用真实顾客样张校准去底参数** —— 后者是当前最大的风险，合成图只能证明代码跑通，不能证明效果好。
 

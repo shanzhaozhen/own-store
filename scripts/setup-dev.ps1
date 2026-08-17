@@ -1,4 +1,4 @@
-# 开发环境安装。装完直接能跑 python -m shop_print。
+﻿# 开发环境安装。装完直接能跑 python -m shop_print。
 #
 # 为什么不能只 pip install -e ".[dev]"：
 #   rapidocr 的依赖里写的是 opencv-python（完整版），会**覆盖**我们要的
@@ -8,6 +8,20 @@
 #
 # 用法：  .\scripts\setup-dev.ps1
 
+
+
+# 控制台输出统一成 UTF-8。
+# Windows PowerShell 5.1（店铺机上大概只有这个）自身的输出按系统代码页编码，
+# 和 bat 里的 chcp 65001 不一致时中文全是乱码 —— 实测踩过。
+# 这里把代码页和 .NET 的输出编码一起对齐，怎么启动都不乱。
+if ([Console]::OutputEncoding.CodePage -ne 65001) {
+    try {
+        chcp 65001 > $null
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    } catch {
+        # 非交互环境没有控制台，设不了就算了，不能因此不干活
+    }
+}
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root

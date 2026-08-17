@@ -1,11 +1,17 @@
 @echo off
-rem 双击这个文件启动打印助手（源码模式，开发机用）。
-rem 想跑打包好的 exe：运行.bat -Packaged        只出自检报告：运行.bat -SelfCheck
-rem 真正的逻辑在同目录的 run.ps1（这个 bat 内容保持 ASCII 防乱码）。
+rem Launcher for the shop print assistant (dev mode: runs from source).
+rem Options: -Packaged (run the built exe) / -SelfCheck / -DebugLog
+rem All logic + all Chinese text live in run.ps1.
+rem This file stays pure ASCII on purpose: cmd reads a .bat with the console
+rem code page, and non-ASCII bytes here (even inside rem) desync the parser.
 setlocal
 chcp 65001 >nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run.ps1" %*
-rem 只有出错才停下来让人看错误信息；正常关窗口就直接结束
+where /q pwsh
+if %errorlevel%==0 (
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0run.ps1" %*
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run.ps1" %*
+)
 if errorlevel 1 (
     echo.
     pause

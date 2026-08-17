@@ -81,8 +81,13 @@ samples/    真实拍照样张，调参与回归测试基准
 tests/      conftest.py 会把 %LOCALAPPDATA% 重定向到临时目录，别往真实数据目录写
 ```
 
-面向长辈的脚本一律做成「中文名 `.bat` 外壳 + ASCII 名 `.ps1` 逻辑」：`.bat` 里只放 ASCII，
-中文提示写在 `.ps1` 里 —— cmd 换代码页时中文会变乱码。
+面向长辈的脚本一律做成「中文名 `.bat` 外壳 + ASCII 名 `.ps1` 逻辑」，两条硬规矩
+（`tests/test_scripts.py` 盯着，细节见 `docs/07`）：
+
+- **`.ps1` 存成带 BOM 的 UTF-8** —— Windows PowerShell 5.1 把没 BOM 的 UTF-8 按 GBK 读，
+  中文乱码还会把脚本解析坏（开发机用 pwsh 7 测不出来）
+- **`.bat` 必须纯 ASCII，连 `rem` 注释都不能有中文** —— cmd 按代码页边读边执行，
+  中文会让它从下一行中间开始执行；`.bat` 里还要先找 `pwsh`、没有再退回 `powershell`
 
 ## 常用命令
 

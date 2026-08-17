@@ -1,9 +1,14 @@
 @echo off
-rem 双击这个文件把「打印助手」装到店铺电脑上。
-rem 真正的逻辑在同目录的 install-to-shop.ps1（中文提示都写在那里；
-rem 这个 bat 内容全部保持 ASCII，避免 cmd 换代码页时中文变乱码）。
+rem Install the packaged app onto the shop PC (needs admin; will self-elevate).
+rem All logic + all Chinese text live in install-to-shop.ps1.
+rem Keep this file pure ASCII (see the note in the launcher bat).
 setlocal
 chcp 65001 >nul
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-to-shop.ps1" %*
+where /q pwsh
+if %errorlevel%==0 (
+    pwsh -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-to-shop.ps1" %*
+) else (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-to-shop.ps1" %*
+)
 echo.
 pause

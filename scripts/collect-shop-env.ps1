@@ -1,4 +1,4 @@
-# 采集店铺电脑的环境信息。**去店铺之前先让父母或自己在店铺机上跑一次**，
+﻿# 采集店铺电脑的环境信息。**去店铺之前先让父母或自己在店铺机上跑一次**，
 # 把结果发回来，据此定默认配置（尤其是柯美 225i 的准确名称和微信目录）。
 # 一般由 采集店铺环境.bat 双击调起。不需要管理员，不改任何东西，只读。
 #
@@ -10,6 +10,19 @@
 
 [CmdletBinding()]
 param([string]$OutDir = '')
+
+# 控制台输出统一成 UTF-8。
+# Windows PowerShell 5.1（店铺机上大概只有这个）自身的输出按系统代码页编码，
+# 和 bat 里的 chcp 65001 不一致时中文全是乱码 —— 实测踩过。
+# 这里把代码页和 .NET 的输出编码一起对齐，怎么启动都不乱。
+if ([Console]::OutputEncoding.CodePage -ne 65001) {
+    try {
+        chcp 65001 > $null
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+    } catch {
+        # 非交互环境没有控制台，设不了就算了，不能因此不干活
+    }
+}
 
 $ErrorActionPreference = 'Continue'
 if (-not $OutDir) { $OutDir = Join-Path ([Environment]::GetFolderPath('Desktop')) '店铺环境' }
