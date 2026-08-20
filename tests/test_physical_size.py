@@ -17,6 +17,8 @@ import pytest
 
 from shop_print.core import cards, convert, ocr
 
+from . import synth
+
 PT_PER_MM = 72.0 / 25.4
 A4 = (210.0, 297.0)
 
@@ -112,3 +114,40 @@ def test_身份证就是85_6乘54毫米(tmp_path) -> None:
     with pymupdf.open(path) as doc:
         for index in range(2):
             assert 量图片框(doc[0], index) == pytest.approx((85.6, 54.0), abs=0.3)
+
+
+def test_照片进去_纸上量出来就是85_6乘54(tmp_path) -> None:
+    """整条链路的验收标准：拿尺子量**纸上印出来那块**，必须是 85.6×54。
+
+    前面几条量的是"PDF 里声明的图片框"，可是图片里比卡片多一圈白边
+    （裁的时候刻意留的，为了不切掉证件的边和圆角）。只盯图片框就会漏掉
+    "白边挤掉了卡片"这种错 —— 真实照片实测过：卡片本体只印出 82.6mm，短了 3mm。
+
+    所以这里把页面渲染成位图，量**有墨的范围**：白边是白的，量到的就是卡片本身。
+    """
+    import cv2
+
+    items = [
+        cards.prepare_card(synth.card_photo(seed=seed), "id", check_flip=False) for seed in (21, 22)
+    ]
+    path, layout = cards.merge_to_pdf(items, tmp_path / "拍照的身份证.pdf")
+    assert layout.scale == pytest.approx(1.0)
+    for item in items:
+        assert item.card_size_mm == pytest.approx((85.6, 54.0), abs=0.05)
+
+    dpi = 300
+    页 = cv2.imdecode(
+        np.frombuffer(convert.render_page_png(path, 0, dpi=dpi), np.uint8), cv2.IMREAD_GRAYSCALE
+    )
+    墨 = 页 < 245
+    有墨的行 = np.where(墨.any(axis=1))[0]
+    assert 有墨的行.size > 0
+    块 = np.split(有墨的行, np.where(np.diff(有墨的行) > 20)[0] + 1)  # 两张之间是空白，按行断开
+    assert len(块) == 2, f"一张纸上应该看到两块墨迹，实际 {len(块)}"
+    for 块行 in 块:
+        子图 = 墨[块行[0] : 块行[-1] + 1]
+        列 = np.where(子图.any(axis=0))[0]
+        宽mm = (列[-1] - 列[0] + 1) / dpi * 25.4
+        高mm = (块行[-1] - 块行[0] + 1) / dpi * 25.4
+        # ±1mm：抠图本身有零点几毫米误差，再加上涂白边界那两三个像素的过渡
+        assert (宽mm, 高mm) == pytest.approx((85.6, 54.0), abs=1.0)

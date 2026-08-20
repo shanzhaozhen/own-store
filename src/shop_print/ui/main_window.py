@@ -12,7 +12,6 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
-    QFileDialog,
     QGridLayout,
     QLabel,
     QMainWindow,
@@ -23,21 +22,21 @@ from PySide6.QtWidgets import (
 )
 
 from .. import config as config_mod
-from .. import paths, texts
-from ..core import convert, history, intake
+from .. import texts
+from ..core import history, intake
 from ..core.enhance import EnhanceOptions
 from ..core.errors import ShopPrintError
 from ..texts import ErrorKind
 from .page_cards import CardsPage
-from .page_inbox import InboxPage
 from .page_ocr import OcrPage
 from .page_photo import PhotoPage
 from .page_print import PrintPage
+from .page_workspace import WorkspacePage
 from .workers import run_async
 
 logger = logging.getLogger(__name__)
 
-_PAGE_HOME, _PAGE_PRINT, _PAGE_PHOTO, _PAGE_OCR, _PAGE_INBOX, _PAGE_CARDS = range(6)
+_PAGE_HOME, _PAGE_PRINT, _PAGE_PHOTO, _PAGE_OCR, _PAGE_WORKSPACE, _PAGE_CARDS = range(6)
 _SECRET_CLICKS = 5
 
 
@@ -85,7 +84,7 @@ class MainWindow(QMainWindow):
         self._print_page = PrintPage(config)
         self._photo_page = PhotoPage(config)
         self._ocr_page = OcrPage(config)
-        self._inbox_page = InboxPage(config)
+        self._workspace_page = WorkspacePage(config)
         self._cards_page = CardsPage(config)
 
         for page in (
@@ -93,7 +92,7 @@ class MainWindow(QMainWindow):
             self._print_page,
             self._photo_page,
             self._ocr_page,
-            self._inbox_page,
+            self._workspace_page,
             self._cards_page,
         ):
             self._stack.addWidget(page)
@@ -102,7 +101,7 @@ class MainWindow(QMainWindow):
             self._print_page,
             self._photo_page,
             self._ocr_page,
-            self._inbox_page,
+            self._workspace_page,
             self._cards_page,
         ):
             page.back.connect(self.go_home)
@@ -112,11 +111,11 @@ class MainWindow(QMainWindow):
         self._cards_page.printRequested.connect(
             lambda files: self.open_print(files, actual_size=True)
         )
-        self._inbox_page.printRequested.connect(self.open_print)
-        self._inbox_page.enhanceRequested.connect(self.open_photo)
-        self._inbox_page.ocrRequested.connect(self.open_ocr)
-        self._inbox_page.cardRequested.connect(self.open_cards)
-        self._inbox_page.pasteRequested.connect(self._paste_image)
+        self._workspace_page.printRequested.connect(self.open_print)
+        self._workspace_page.enhanceRequested.connect(self.open_photo)
+        self._workspace_page.ocrRequested.connect(self.open_ocr)
+        self._workspace_page.cardRequested.connect(self.open_cards)
+        self._workspace_page.pasteRequested.connect(self._paste_image)
 
         history.init()
         self._start_watching()
@@ -133,18 +132,22 @@ class MainWindow(QMainWindow):
         self._card_photo = BigCard("🖼️", texts.HOME_CARD_PHOTO_TITLE, texts.HOME_CARD_PHOTO_HINT)
         self._card_ocr = BigCard("🔤", texts.HOME_CARD_OCR_TITLE, texts.HOME_CARD_OCR_HINT)
         self._card_cards = BigCard("🪪", texts.HOME_CARD_CARDS_TITLE, texts.HOME_CARD_CARDS_HINT)
-        self._card_inbox = BigCard("📥", texts.HOME_CARD_INBOX_TITLE, texts.HOME_CARD_INBOX_HINT)
+        self._card_workspace = BigCard(
+            "📁", texts.HOME_CARD_WORKSPACE_TITLE, texts.HOME_CARD_WORKSPACE_HINT
+        )
         self._card_paste = BigCard("📋", texts.HOME_CARD_PASTE_TITLE, texts.HOME_CARD_PASTE_HINT)
 
-        self._card_photo.clicked.connect(lambda: self._pick_image(self.open_photo))
-        self._card_ocr.clicked.connect(lambda: self._pick_image(self.open_ocr))
+        # 「照片变清楚」「照片转文字」点进去**先到页面**，在页面上再选图片
+        # （用户反馈：不要一点卡片就弹文件对话框）
+        self._card_photo.clicked.connect(lambda: self.open_photo(None))
+        self._card_ocr.clicked.connect(lambda: self.open_ocr(None))
         self._card_cards.clicked.connect(lambda: self.open_cards(None))
-        self._card_inbox.clicked.connect(self.open_inbox)
+        self._card_workspace.clicked.connect(lambda: self.open_workspace())
         self._card_paste.clicked.connect(self._paste_image)
 
         # 没有「打印文档」这一项：原件是 Word/Excel/PDF 的时候直接在 Office 里
         # 改好再打就行，工具在这上面帮不了忙（还多一道转换）。
-        # 需要打印的入口都在具体的活儿里：照片变清楚 / 证件 / 微信收到的文件。
+        # 需要打印的入口都在具体的活儿里：照片变清楚 / 证件 / 工作区里的文件。
         grid = QGridLayout()
         grid.setSpacing(18)
         for index, card in enumerate(
@@ -152,7 +155,7 @@ class MainWindow(QMainWindow):
                 self._card_photo,
                 self._card_ocr,
                 self._card_cards,
-                self._card_inbox,
+                self._card_workspace,
                 self._card_paste,
             )
         ):
@@ -174,21 +177,6 @@ class MainWindow(QMainWindow):
     def go_home(self) -> None:
         self._stack.setCurrentIndex(_PAGE_HOME)
 
-    # ── 选文件 ──────────────────────────────────────────────────
-    def _pick_image(self, handler) -> None:
-        images = " ".join(f"*{s}" for s in sorted(convert.IMAGE_SUFFIXES))
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择照片", str(self._start_dir()), f"图片 ({images});;所有文件 (*)"
-        )
-        if path:
-            handler(Path(path))
-
-    def _start_dir(self) -> Path:
-        """文件对话框默认打开"待打印"文件夹 —— 长辈平时就往那里存。"""
-        if paths.INBOX_DIR.is_dir():
-            return paths.INBOX_DIR
-        return Path.home() / "Documents"
-
     # ── 页面跳转 ────────────────────────────────────────────────
     def open_print(
         self,
@@ -202,19 +190,21 @@ class MainWindow(QMainWindow):
     def _print_with_enhance(self, files: list, options: object) -> None:
         self.open_print([Path(f) for f in files], options)  # type: ignore[arg-type]
 
-    def open_photo(self, path: Path) -> None:
-        self._photo_page.load(Path(path))
+    def open_photo(self, path: Path | None = None) -> None:
+        """不带路径时进空页面，让长辈在页面上点那块框选图片。"""
+        self._photo_page.load(Path(path) if path is not None else None)
         self._stack.setCurrentIndex(_PAGE_PHOTO)
 
-    def open_ocr(self, path: Path) -> None:
-        self._ocr_page.load(Path(path))
+    def open_ocr(self, path: Path | None = None) -> None:
+        self._ocr_page.load(Path(path) if path is not None else None)
         self._stack.setCurrentIndex(_PAGE_OCR)
 
-    def open_inbox(self) -> None:
-        self._inbox_page.reload()
+    def open_workspace(self, note: str = "") -> None:
+        """打开工作区页。`note` 是扫完文件之后要显示的一句话（比如刚拖进来了什么）。"""
+        self._workspace_page.reload(note)
         self._new_count = 0
-        self._card_inbox.set_badge(0)
-        self._stack.setCurrentIndex(_PAGE_INBOX)
+        self._card_workspace.set_badge(0)
+        self._stack.setCurrentIndex(_PAGE_WORKSPACE)
 
     def open_cards(self, sources: Path | list[Path] | None = None) -> None:
         """证件二合一。带路径时把图片放进空位（一张或两张都行）。"""
@@ -230,9 +220,13 @@ class MainWindow(QMainWindow):
             self._restart_watching()
             self._ocr_page.sync_cloud_button()
 
-    # ── 剪贴板与拖拽 ────────────────────────────────────────────
+    # ── 剪贴板与拖拽：都落到工作区 ──────────────────────────────
     def _paste_image(self) -> None:
-        """粘贴剪贴板里的图片。
+        """粘贴剪贴板里的图片 / 文件，落进工作区。
+
+        **不直接跳到某个功能页**（用户反馈的第 4 条）：粘的东西是图片还是文件、
+        要拿它做什么（打印 / 变清楚 / 拼证件 / 转文字），只有长辈自己知道。
+        所以统一存进工作区，再由他在工作区那一页点对应的按钮。
 
         取图和存盘都丢到后台线程：手机拍的图有十几兆，在界面线程里编码 PNG
         会让窗口卡住几秒 —— Windows 这时候画的是一张定格的旧画面，看起来
@@ -241,33 +235,36 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(texts.BUSY_PROCESSING, 3000)
         run_async(
             self._grab_clipboard,
-            on_done=self._on_pasted,
+            config_mod.workspace_dir(self._config.intake),
+            on_done=self._on_landed,
             on_failed=lambda message: QMessageBox.information(self, texts.APP_TITLE, message),
         )
 
     @staticmethod
-    def _grab_clipboard() -> tuple[str, object]:
-        """返回 (类型, 内容)。在工作线程里跑，所以不碰任何界面对象。"""
+    def _grab_clipboard(workspace: Path) -> list[Path]:
+        """剪贴板 → 工作区里的文件列表。在工作线程里跑，所以不碰任何界面对象。"""
         image = intake.clipboard_image()
         if image is not None:
-            return ("image", intake.save_incoming_image(image))
+            return [intake.save_incoming_image(image, target_dir=workspace)]
         files = intake.clipboard_files()
         if files:
-            return ("files", [f.path for f in files])
+            return intake.copy_into_workspace([f.path for f in files], workspace)
         raise ShopPrintError(ErrorKind.NO_IMAGE_IN_CLIPBOARD, "剪贴板里没有图片也没有文件")
 
-    def _on_pasted(self, result: tuple[str, object]) -> None:
-        kind, payload = result
-        if kind == "image":
-            self.open_photo(payload)  # type: ignore[arg-type]
-        else:
-            self.open_print(payload)  # type: ignore[arg-type]
+    def _on_landed(self, files: list[Path]) -> None:
+        """文件已经进工作区了：打开工作区页，新文件排在最前面。"""
+        note = ""
+        if files:
+            names = "、".join(p.name for p in files[:3])
+            note = f"已经放进工作区：{names}\n点文件上的按钮选要做什么"
+        self.open_workspace(note)
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
+        """拖进来的文件也**先进工作区**，让长辈在那里挑要做什么。"""
         items = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
         accepted, rejected = intake.accept_dropped(items)
         if rejected:
@@ -279,12 +276,15 @@ class MainWindow(QMainWindow):
             )
         if not accepted:
             return
-        # 拖进来一张图片时直接进增强页（大概率是拍照文档），其余情况进打印页
-        if len(accepted) == 1 and accepted[0].is_image:
-            self.open_photo(accepted[0].path)
-        else:
-            self.open_print([item.path for item in accepted])
         event.acceptProposedAction()
+        self.statusBar().showMessage(texts.BUSY_PROCESSING, 3000)
+        run_async(
+            intake.copy_into_workspace,
+            [item.path for item in accepted],
+            config_mod.workspace_dir(self._config.intake),
+            on_done=self._on_landed,
+            on_failed=lambda message: QMessageBox.information(self, texts.APP_TITLE, message),
+        )
 
     # ── 目录监控 ────────────────────────────────────────────────
     def _start_watching(self) -> None:
@@ -310,11 +310,11 @@ class MainWindow(QMainWindow):
 
     def _on_new_file(self, source: intake.SourceFile) -> None:
         logger.info("收到新文件：%s", source.path)
-        if self._stack.currentIndex() == _PAGE_INBOX:
-            self._inbox_page.reload()
+        if self._stack.currentIndex() == _PAGE_WORKSPACE:
+            self._workspace_page.reload()
         else:
             self._new_count += 1
-            self._card_inbox.set_badge(self._new_count)
+            self._card_workspace.set_badge(self._new_count)
 
     def closeEvent(self, event) -> None:
         if self._watcher is not None:

@@ -437,3 +437,38 @@ def test_实打证件PDF_按实物尺寸(tmp_path, 屏蔽驱动噪音) -> None:
         assert page.rect.width / cards.PT_PER_MM == pytest.approx(210, abs=1)
         # 打印是整页光栅化，量不出单张卡片的框；改为量整页有没有被缩
         assert page.get_image_info()[0]["bbox"][2] / cards.PT_PER_MM == pytest.approx(210, abs=1)
+
+
+# ── 等比缩放（用户反馈"直接打印会超出 A4 边缘"）─────────────────────
+def test_缩放默认是铺满可打印区() -> None:
+    """默认 zoom=1.0：等比缩到可打印区里，永远不超边 —— 这就是"不超出 A4"的保证。"""
+    assert printing.PrintSettings().zoom == 1.0
+
+
+def test_缩放调小内容也跟着小(tmp_path) -> None:
+    """预览和真打共用同一套摆放算式（`preview_sheet` / `_draw_fitted`），
+    所以量预览里"有墨的范围"就能验缩放生效。"""
+    import numpy as np
+    from PIL import Image
+
+    src = tmp_path / "整页黑.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=595.276, height=841.89)
+    page.draw_rect(page.rect, color=None, fill=(0, 0, 0))
+    document.save(src)
+    document.close()
+    纸 = printing.PaperMetrics(210, 297, 200, 287, 5, 5)
+
+    def 墨迹宽高(zoom: float) -> tuple[int, int]:
+        png = printing.preview_sheet(src, 0, printing.PrintSettings(zoom=zoom), dpi=100, metrics=纸)
+        with Image.open(io.BytesIO(png)) as image:
+            墨 = np.array(image.convert("L")) < 128
+        行 = np.where(墨.any(axis=1))[0]
+        列 = np.where(墨.any(axis=0))[0]
+        return (int(列[-1] - 列[0] + 1), int(行[-1] - 行[0] + 1))
+
+    满宽, 满高 = 墨迹宽高(1.0)
+    小宽, 小高 = 墨迹宽高(0.8)
+    assert 小宽 < 满宽 and 小高 < 满高
+    assert 小宽 / 满宽 == pytest.approx(0.8, abs=0.05)
+    assert 小高 / 满高 == pytest.approx(0.8, abs=0.05)

@@ -82,6 +82,11 @@ class PrintSettings:
     # 有 4–5mm 打不到的边，也就是缩掉约 4%），身份证就从 85.6mm 变成 82mm 了。
     # 代价是超出可打印区的部分会被裁掉 —— 证件排版本来就留了 6mm 安全边。
     actual_size: bool = False
+    # 等比缩放，1.0 = 刚好铺满可打印区（默认，永远不会超边）。
+    # 用户反馈"直接打印会超出 A4 边缘"，所以界面上给了个「大小」加减按钮：
+    # 调小留白边，调大到超过 1.0 时超出可打印区的部分会被驱动裁掉（预览里看得见）。
+    # `actual_size=True` 时不生效 —— 证件那条路必须 1:1。
+    zoom: float = 1.0
     # 把输出重定向到文件。给「Microsoft Print to PDF」这类虚拟打印机用：
     # 不填它会弹"另存为"对话框，填了就直接写文件、不弹窗。
     # 开发机上没有柯美 225i，全链路验证就靠这个。
@@ -307,7 +312,7 @@ def print_pdf(
                 if conf.actual_size:
                     _draw_actual_size(dc, image, page_rect, device_landscape, device)
                 else:
-                    _draw_fitted(dc, image, printable_w, printable_h)
+                    _draw_fitted(dc, image, printable_w, printable_h, conf.zoom)
                 dc.EndPage()
                 if on_progress:
                     on_progress(ordinal, len(indexes))
@@ -328,14 +333,19 @@ def print_pdf(
         return len(indexes)
 
 
-def _draw_fitted(dc, image: Image.Image, printable_w: int, printable_h: int) -> None:
+def _draw_fitted(
+    dc, image: Image.Image, printable_w: int, printable_h: int, zoom: float = 1.0
+) -> None:
     """等比缩放居中画到可打印区域。普通文档走这条：宁可整体缩一点，也别裁掉边。
 
     打印机 DC 的原点就在可打印区左上角，所以不用再加 PHYSICALOFFSET；
     但**可打印区不等于纸张尺寸**，必须用 HORZRES/VERTRES 而不是纸张点数，
     否则内容会被裁掉边。
+
+    `zoom` 是界面上那个「大小」：1.0 铺满可打印区，调小留白边，调大会被裁掉边
+    （预览用的是同一套算式，所以裁到哪长辈看得见）。
     """
-    scale = min(printable_w / image.width, printable_h / image.height)
+    scale = min(printable_w / image.width, printable_h / image.height) * max(zoom, 0.05)
     width = max(1, int(image.width * scale))
     height = max(1, int(image.height * scale))
     left = (printable_w - width) // 2
@@ -505,7 +515,9 @@ def preview_sheet(
         left += offset_x  # DC 坐标 → 纸面坐标
         top += offset_y
     else:
-        scale = min(printable_w / content.width, printable_h / content.height)
+        scale = min(printable_w / content.width, printable_h / content.height) * max(
+            conf.zoom, 0.05
+        )
         width = max(1, int(content.width * scale))
         height = max(1, int(content.height * scale))
         left = offset_x + (printable_w - width) // 2

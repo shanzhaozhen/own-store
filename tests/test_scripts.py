@@ -30,8 +30,7 @@ def test_有脚本可查() -> None:
 def test_ps1必须带UTF8_BOM(path: Path) -> None:
     """没 BOM 的话 Windows PowerShell 5.1 会按 GBK 读，中文乱码 + 语法错。"""
     assert path.read_bytes().startswith(UTF8_BOM), (
-        f"{path.name} 没有 UTF-8 BOM —— 双击 bat 时会乱码并报语法错，"
-        "用 utf-8-sig 重存一次"
+        f"{path.name} 没有 UTF-8 BOM —— 双击 bat 时会乱码并报语法错，用 utf-8-sig 重存一次"
     )
 
 

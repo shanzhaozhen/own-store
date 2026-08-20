@@ -161,10 +161,17 @@ def _placement(
 
 
 def _encode_png(array: np.ndarray, binary: bool) -> bytes:
-    """numpy → PNG 字节。二值图存成 1-bit，体积小很多，黑白打印也更利。"""
-    image = Image.fromarray(array, mode="L")
-    if binary:
-        image = image.convert("1")
+    """numpy → PNG 字节。二值图存成 1-bit，体积小很多，黑白打印也更利。
+
+    三通道的进来就按彩色存（BGR → RGB）：证件二合一和「照片变清楚」都能出彩色，
+    那是给"另存为 PDF"用的（店里打印机只有黑白，打印时驱动自己会转灰）。
+    """
+    if array.ndim == 3:
+        image = Image.fromarray(array[:, :, ::-1])  # BGR → RGB
+    else:
+        image = Image.fromarray(array, mode="L")
+        if binary:
+            image = image.convert("1")
     buffer = io.BytesIO()
     image.save(buffer, format="PNG", optimize=True)
     return buffer.getvalue()
@@ -183,9 +190,36 @@ def _prepare_image(src: Path, options: ConvertOptions) -> tuple[bytes, int, int,
         return data, gray.shape[1], gray.shape[0], dpi
 
     result = enhance_mod.enhance_file(src, options.enhance)
-    binary = result.mode_used == enhance_mod.MODE_TEXT
+    binary = result.mode_used == enhance_mod.MODE_TEXT and not result.is_color
     data = _encode_png(result.image, binary=binary)
     return data, result.image.shape[1], result.image.shape[0], dpi
+
+
+def image_to_pdf(
+    image: np.ndarray, out_path: str | Path, paper: str = "A4", auto_orient: bool = True
+) -> Path:
+    """一张**已经处理好**的图（numpy）→ 一页 PDF。给「另存为 PDF」用。
+
+    和 `images_to_pdf` 的区别是不再读盘、不再增强 —— 界面上预览的那张图
+    直接落成 PDF，长辈看到的和存下来的是同一份像素。
+    """
+    out_path = Path(out_path)
+    height, width = image.shape[:2]
+    landscape = auto_orient and width > height
+    page_w, page_h = _page_size(paper, landscape)
+    data = _encode_png(image, binary=False)
+
+    doc = pymupdf.open()
+    try:
+        page = doc.new_page(width=page_w, height=page_h)
+        # 按"适应纸张"摆：图片自带的 dpi 不可信（裁过、缩过），铺满页内留 5mm 边
+        rect = _placement(float(width), float(height), page_w, page_h, FIT_FIT)
+        page.insert_image(rect, stream=data)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        doc.save(out_path, deflate=True, garbage=3)
+    finally:
+        doc.close()
+    return out_path
 
 
 def images_to_pdf(sources: list[Path], out_path: Path, options: ConvertOptions) -> Path:

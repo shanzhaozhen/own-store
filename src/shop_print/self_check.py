@@ -78,6 +78,9 @@ def _check_resources(report: _Report) -> None:
 
 
 def _check_paths(report: _Report) -> None:
+    from . import config as config_mod
+
+    cfg = config_mod.load()
     report.title("运行时目录")
     全部就绪 = paths.ensure_runtime_dirs()
     for name, path in (
@@ -85,15 +88,16 @@ def _check_paths(report: _Report) -> None:
         ("打印记录", paths.history_db()),
         ("缓存", paths.cache_dir()),
         ("日志", paths.log_dir()),
-        ("输出（转好的 Word 等）", paths.output_dir()),
+        ("保存到（转好的 Word、证件 PDF 等）", config_mod.save_dir(cfg.output)),
     ):
         report.item(f"{name}：{path}")
     if not 全部就绪:
         report.bad(f"有目录建不出来（看看 {paths.data_dir()} 是不是被同名文件占了）", fatal=False)
-    if paths.ensure_inbox_dir():
-        report.ok(f"待打印文件夹：{paths.INBOX_DIR}")
+    工作区 = config_mod.workspace_dir(cfg.intake)
+    if 工作区.is_dir():
+        report.ok(f"工作区文件夹：{工作区}")
     else:
-        report.bad(f"建不了待打印文件夹：{paths.INBOX_DIR}", fatal=False)
+        report.bad(f"建不了工作区文件夹：{工作区}", fatal=False)
 
 
 def _check_printers(report: _Report) -> None:

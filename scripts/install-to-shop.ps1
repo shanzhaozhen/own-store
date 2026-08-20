@@ -3,7 +3,7 @@
 # 做四件事（docs/07-打包与部署.md）：
 #   1. 拷到 C:\ShopPrint\（旧版本先改名留着，方便回滚）
 #   2. 公共桌面放「打印助手」快捷方式
-#   3. 建 C:\打印\待打印\，公共桌面放它的快捷方式
+#   3. 建默认工作区 C:\打印\待打印\，公共桌面放它的快捷方式（工作区路径在设置里可改）
 #   4. -AutoStart 时写开机自启
 #
 # 桌面上**只留这两个图标**。多一个都会让长辈犹豫该点哪个。
@@ -31,7 +31,8 @@ if ([Console]::OutputEncoding.CodePage -ne 65001) {
 
 $ErrorActionPreference = 'Stop'
 $AppName = '打印助手'
-$InboxDir = 'C:\打印\待打印'
+# 默认工作区（= paths.WORKSPACE_DIR）。装好之后店主可以在设置里改到别的盘
+$WorkspaceDir = 'C:\打印\待打印'
 
 function 提示($text) { Write-Host $text -ForegroundColor Cyan }
 function 完成($text) { Write-Host "  √ $text" -ForegroundColor Green }
@@ -92,12 +93,12 @@ if (Test-Path $icon) { $appLink.IconLocation = $icon }
 $appLink.Save()
 完成 "桌面图标：$AppName"
 
-New-Item -ItemType Directory -Force -Path $InboxDir | Out-Null
-$inboxLink = $shell.CreateShortcut((Join-Path $desktop '待打印.lnk'))
-$inboxLink.TargetPath = $InboxDir
-$inboxLink.Description = '微信里的文件另存到这里，打印助手会自动看到'
-$inboxLink.Save()
-完成 "待打印文件夹：$InboxDir（桌面也有图标）"
+New-Item -ItemType Directory -Force -Path $WorkspaceDir | Out-Null
+$workspaceLink = $shell.CreateShortcut((Join-Path $desktop '待打印.lnk'))
+$workspaceLink.TargetPath = $WorkspaceDir
+$workspaceLink.Description = '微信里的文件另存到这里，打印助手会自动看到'
+$workspaceLink.Save()
+完成 "工作区文件夹：$WorkspaceDir（桌面也有图标）"
 
 # ── 4. 开机自启（可选）────────────────────────────────────────
 $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp'

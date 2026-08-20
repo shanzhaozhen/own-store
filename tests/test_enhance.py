@@ -219,3 +219,143 @@ def test_黑点上限挡住了纸被当成墨() -> None:
     out = enhance.stretch_contrast(paper, clip_low=2.0, clip_high=99.5)
     assert out[300:400, 300:400].mean() > 200  # 空白处还是纸
     assert out[10:20, 10:400].mean() < 80  # 字还是黑的
+
+
+# ── 认出整张 A4/A3 纸就裁正拉平（用户反馈的第 2 条）───────────────
+def test_认出整张纸并按标准比例拉平() -> None:
+    """A4 和 A3 的长宽比是同一个数（√2）。既然认出是标准纸，
+    透视校正之后残留的那一两个百分点也该按已知比例修掉。"""
+    result = enhance.enhance(
+        synth.paper_photo(seed=1), enhance.EnhanceOptions(mode=enhance.MODE_TEXT)
+    )
+    assert result.paper == enhance.PAPER_A4_A3
+    assert result.cropped is True
+    高, 宽 = result.image.shape[:2]
+    assert max(高, 宽) / min(高, 宽) == pytest.approx(enhance.PAPER_RATIO, rel=0.005)
+
+
+def test_没有纸就不硬裁() -> None:
+    """整幅都是文档（没有桌面边界）时认不出纸，这时不能瞎裁。"""
+    result = enhance.enhance(
+        synth.photographed_text_document(), enhance.EnhanceOptions(mode=enhance.MODE_TEXT)
+    )
+    assert result.paper == ""
+
+
+def test_按比例拉平只动一条边() -> None:
+    """长边不动、短边跟着算：不丢分辨率，也不会把内容拉扁。"""
+    图 = np.full((1400, 1000, 3), 200, dtype=np.uint8)  # 比例 1.40，差一点点
+    出 = enhance.snap_to_paper_ratio(图)
+    assert 出.shape[0] == 1400
+    assert 出.shape[1] == pytest.approx(round(1400 / enhance.PAPER_RATIO), abs=1)
+
+
+# ── 黑白 / 彩色（用户反馈：红章蓝笔要留住）─────────────────────────
+def test_默认出黑白_彩色要自己开() -> None:
+    photo = synth.paper_photo(seed=2, stamp=True)
+    assert enhance.enhance(photo, enhance.EnhanceOptions()).image.ndim == 2
+    assert enhance.enhance(photo, enhance.EnhanceOptions(color=True)).image.ndim == 3
+
+
+def test_彩色模式留住红章_黑白模式不留() -> None:
+    """红色印章是复印件上最常见的彩色内容。彩色那条路必须保住它的颜色。"""
+    photo = synth.paper_photo(seed=3, stamp=True)
+    彩 = enhance.enhance(photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, color=True)).image
+    高, 宽 = 彩.shape[:2]
+    块 = 彩[int(高 * 0.70) : int(高 * 0.94), int(宽 * 0.60) : int(宽 * 0.84)]
+    偏红 = (块[..., 2].astype(int) - 块[..., 0].astype(int)) > 40
+    assert 偏红.mean() > 0.02, f"红章没留住（偏红像素只占 {偏红.mean() * 100:.1f}%）"
+
+
+def test_彩色模式的纸一样是白的() -> None:
+    """彩色不代表脏：背景照样要压白，不然打出来一片灰。"""
+    result = enhance.enhance(
+        synth.paper_photo(seed=4), enhance.EnhanceOptions(mode=enhance.MODE_TEXT, color=True)
+    )
+    亮度 = result.image.max(axis=2)
+    assert float(np.mean(亮度 > 245)) > 0.5
+
+
+def test_彩色不二值化_灰阶要留着() -> None:
+    """二值化只剩黑白两色，彩色那条路必须绕开它。"""
+    result = enhance.enhance(
+        synth.paper_photo(seed=5, stamp=True),
+        enhance.EnhanceOptions(mode=enhance.MODE_TEXT, color=True),
+    )
+    assert len(np.unique(result.image)) > 32
+
+
+# ── 裁剪边缘可调（用户反馈"有时候裁剪得太过了"）─────────────────────
+def test_边缘往外放能多留一圈() -> None:
+    """同一张照片，边缘往外放之后裁出来的图应该更大（多留了纸边和一点桌面）。"""
+    photo = synth.paper_photo(seed=6)
+    紧 = enhance.enhance(photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, crop_margin=-0.03))
+    正常 = enhance.enhance(photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT))
+    松 = enhance.enhance(photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, crop_margin=0.04))
+    assert 紧.image.shape[0] < 正常.image.shape[0] < 松.image.shape[0]
+    # 三种都还是认出的那张纸、还是标准比例
+    for result in (紧, 正常, 松):
+        assert result.paper == enhance.PAPER_A4_A3
+        高, 宽 = result.image.shape[:2]
+        assert max(高, 宽) / min(高, 宽) == pytest.approx(enhance.PAPER_RATIO, rel=0.01)
+
+
+def test_不裁就一点不动尺寸() -> None:
+    """「不裁」是给"裁坏了"兜底的：整幅原样处理，尺寸和原图一致。"""
+    photo = synth.paper_photo(seed=7)
+    result = enhance.enhance(
+        photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, deskew=False, crop_margin=0.05)
+    )
+    assert result.cropped is False
+    assert result.paper == ""
+    assert result.image.shape[:2] == photo.shape[:2]
+
+
+# ── 彩色还原原色（用户反馈"尽量还原文件的原色"）─────────────────────
+def test_暖光下拍的纸也修成白的() -> None:
+    """同一份文件在暖光和正常光下拍，处理完的纸应该都是白的、颜色也该接近 ——
+    这才叫"还原原色"（白平衡是全局三个增益，不会造成局部伪色）。"""
+    正常 = synth.paper_photo(seed=8, stamp=True)
+    暖光 = np.clip(正常.astype(np.float32) * np.float32([0.78, 0.92, 1.0]), 0, 255).astype(np.uint8)
+    出正常, 出暖光 = (
+        enhance.enhance(img, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, color=True)).image
+        for img in (正常, 暖光)
+    )
+    for out in (出正常, 出暖光):
+        纸 = out[out.min(axis=2) > 200]  # 亮的那一片就是纸
+        assert 纸.size > 0
+        assert float(np.ptp(纸.reshape(-1, 3).mean(axis=0))) < 8, "纸还带着色偏"
+
+
+def test_彩色不会把红章压成近黑() -> None:
+    """踩过的坑：黑白那套对比拉伸 + gamma 用在彩色上，章的亮度 209 → 26。
+    彩色链路对"有颜色"的像素走轻口味，亮度必须保住。"""
+    import cv2
+
+    photo = synth.paper_photo(seed=9, stamp=True)
+    hsv0 = cv2.cvtColor(photo, cv2.COLOR_BGR2HSV)
+    章 = (hsv0[..., 1] > 120) & (hsv0[..., 2] > 60)
+    assert 章.sum() > 500
+    out = enhance.enhance(
+        photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, color=True, deskew=False)
+    ).image
+    原亮 = float(hsv0[..., 2][章].mean())
+    新亮 = float(cv2.cvtColor(out, cv2.COLOR_BGR2HSV)[..., 2][章].mean())
+    assert 新亮 > 原亮 * 0.75, f"章被压暗了：{原亮:.0f} → {新亮:.0f}"
+    # 色相不许漂：红还是红
+    原色相 = float(hsv0[..., 0][章].mean())
+    新色相 = float(cv2.cvtColor(out, cv2.COLOR_BGR2HSV)[..., 0][章].mean())
+    assert abs(新色相 - 原色相) < 8, f"色相漂了：{原色相:.1f} → {新色相:.1f}"
+
+
+def test_彩色时黑字还是黑的() -> None:
+    """彩色不能变成"什么都不处理"：没颜色的像素照样走重口味，字要够黑。"""
+    import cv2
+
+    photo = synth.paper_photo(seed=10)
+    hsv0 = cv2.cvtColor(photo, cv2.COLOR_BGR2HSV)
+    字 = hsv0[..., 2] < np.percentile(hsv0[..., 2], 3)
+    out = enhance.enhance(
+        photo, enhance.EnhanceOptions(mode=enhance.MODE_TEXT, color=True, deskew=False)
+    ).image
+    assert float(cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)[字].mean()) < 120

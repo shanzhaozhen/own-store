@@ -52,24 +52,45 @@ _PAPER_FLOOR = 215
 # 对比拉伸的黑点上限：算出来的黑点不能高过白点的这个比例。
 # 见 stretch_contrast —— 这条是防"整页发黑"的保险。
 _BLACK_POINT_MAX_RATIO = 0.4
+# A4 和 A3 的长宽比是同一个数（√2 = 297/210）—— 照片里分不出纸有多大，
+# 只能认出"这是一张标准比例的纸"。裁正之后按这个比例把残留的透视误差拉平。
+PAPER_RATIO = 297.0 / 210.0
+# 认纸的比例容差。拍歪一点、边缘找偏一两个像素都会让比例差几个百分点
+_PAPER_RATIO_TOLERANCE = 0.08
+PAPER_A4_A3 = "A4/A3"
+# 三个通道差多少以内算"没颜色"。彩色模式压白纸时只压这种像素 ——
+# 淡黄的荧光笔、浅蓝的表格线通道差更大，压掉就等于把内容擦了
+_NEUTRAL_SPREAD = 18
+# 三通道极差到这个值就算"完全是彩色的"：彩色模式按它把"重口味"和"轻口味"
+# 两版亮度混起来 —— 黑字走重的（实心黑），红章走轻的（不被压暗）
+_COLOR_FULL_SPREAD = 45.0
 
 
 @dataclass
 class EnhanceOptions:
-    """界面上只暴露 mode 和 strength 两项，其余由算法自己决定。"""
+    """界面上暴露 mode、strength、color、裁剪三项，其余由算法自己决定。"""
 
     mode: str = MODE_AUTO
     strength: int = 50  # 0–100，界面上的"淡 ←→ 浓"
     deskew: bool = True  # 自动裁正/旋正，不确信时算法会自己跳过
     max_side: int | None = None  # 预览时缩到 1000，打印时留 None 用全分辨率
+    color: bool = False  # 出彩色（红章、蓝笔要留住）。店里打印机只有黑白，彩色是给"另存为"用的
+    # 裁剪边缘：正数往外多留一圈（怕裁到内容），负数往里收。占检出四边形边长的比例。
+    # 用户反馈"有时候裁剪得太过了"，这个值就是给他往外放的
+    crop_margin: float = 0.0
 
 
 @dataclass
 class EnhanceResult:
-    image: np.ndarray  # 单通道：mixed/photo 是灰度，text 是二值
+    image: np.ndarray  # 黑白时单通道（text 是二值），彩色时 BGR 三通道
     mode_used: str  # auto 实际落到了哪一档
     cropped: bool  # 有没有做透视校正
     rotated_deg: float  # 旋正了多少度（0 表示没转）
+    paper: str = ""  # 认出是整张纸时填 "A4/A3"（两者比例相同，照片里分不出大小）
+
+    @property
+    def is_color(self) -> bool:
+        return self.image.ndim == 3
 
 
 @dataclass
@@ -151,6 +172,30 @@ def _order_quad(pts: np.ndarray) -> np.ndarray:
     return ordered
 
 
+def order_quad(pts: np.ndarray) -> np.ndarray:
+    """`_order_quad` 的公开名字，给 core/cards.py 用。"""
+    return _order_quad(pts)
+
+
+def quad_transform(quad: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+    """算出"把这个四边形拉成正矩形"的变换矩阵和目标尺寸。
+
+    单独抽出来是为了让掩膜能跟图片走**同一个**变换（证件二合一要用掩膜
+    把卡片外面涂白），两边各算一次迟早会不一致。
+    """
+    import cv2
+
+    tl, tr, br, bl = quad
+    width = round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
+    height = round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
+    width, height = max(width, 1), max(height, 1)
+    dst = np.array(
+        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype=np.float32
+    )
+    matrix = cv2.getPerspectiveTransform(quad.astype(np.float32), dst)
+    return matrix, (width, height)
+
+
 def detect_page_quad(
     image: np.ndarray,
     min_area_ratio: float = _MIN_QUAD_AREA_RATIO,
@@ -219,16 +264,9 @@ def _has_right_angles(quad: np.ndarray, tolerance_deg: float = 25.0) -> bool:
 
 def warp_to_quad(image: np.ndarray, quad: np.ndarray) -> np.ndarray:
     """把四边形拉成正矩形，顺带裁掉桌面背景。"""
-    tl, tr, br, bl = quad
-    width = round(max(np.linalg.norm(tr - tl), np.linalg.norm(br - bl)))
-    height = round(max(np.linalg.norm(bl - tl), np.linalg.norm(br - tr)))
-    width, height = max(width, 1), max(height, 1)
-    dst = np.array(
-        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]], dtype=np.float32
-    )
-    matrix = cv2.getPerspectiveTransform(quad.astype(np.float32), dst)
+    matrix, size = quad_transform(quad)
     return cv2.warpPerspective(
-        image, matrix, (width, height), flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255)
+        image, matrix, size, flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255)
     )
 
 
@@ -270,17 +308,19 @@ def rotate(image: np.ndarray, degrees: float) -> np.ndarray:
     return cv2.warpAffine(image, matrix, (new_w, new_h), flags=cv2.INTER_CUBIC, borderValue=border)
 
 
-def flatten_illumination(gray: np.ndarray) -> np.ndarray:
-    """去阴影的关键一步：估计光照场，然后把它除掉。
+def illumination_field(gray: np.ndarray) -> np.ndarray:
+    """估计这张图的光照场（背景的明暗分布），返回和输入同尺寸的灰度。
 
-    用大核形态学闭运算把文字"填掉"，剩下的就是纸张本身的明暗分布；
-    原图除以它，阴影、纸张底色、光照渐变被整体抹平。
-
+    用大核形态学闭运算把文字"填掉"，剩下的就是纸张本身的明暗分布。
     背景是低频信息，所以在缩小的图上估计再放大回来 —— 快得多，效果一样。
+
+    单独抽出来是给彩色那条路用的：**三个通道必须共用同一个场**。
+    各通道自己估一遍的话，饱和色（红章）在不同通道里被"填掉"的程度不一样，
+    章的边上会冒出假的青边（实测见 docs/03）。
     """
     h, w = gray.shape[:2]
     if w <= 0 or h <= 0:
-        return gray
+        return np.full_like(gray, 255)
 
     scale = min(1.0, _BG_ESTIMATE_WIDTH / float(w))
     small_w = max(32, round(w * scale))
@@ -293,8 +333,39 @@ def flatten_illumination(gray: np.ndarray) -> np.ndarray:
     background = cv2.GaussianBlur(background, (0, 0), max(1.0, k / 3.0))
 
     background = cv2.resize(background, (w, h), interpolation=cv2.INTER_LINEAR)
-    background = np.maximum(background, 1)  # 防除零
-    return cv2.divide(gray, background, scale=255)
+    return np.maximum(background, 1)  # 防除零
+
+
+def flatten_illumination(gray: np.ndarray) -> np.ndarray:
+    """去阴影的关键一步：估计光照场，然后把它除掉。
+
+    用大核形态学闭运算把文字"填掉"，剩下的就是纸张本身的明暗分布；
+    原图除以它，阴影、纸张底色、光照渐变被整体抹平。
+    """
+    if gray.size == 0:
+        return gray
+    return cv2.divide(gray, illumination_field(gray), scale=255)
+
+
+def white_balance(bgr: np.ndarray) -> np.ndarray:
+    """按**纸的颜色**做全局白平衡：每个通道乘一个常数，让纸回到中性白。
+
+    只用三个全局常数（不是逐像素、也不是逐通道估背景），所以不可能造出局部伪色；
+    暖光下发黄的纸、冷白灯下发蓝的纸都会被拉回白，墨的色相跟着同一组增益走。
+
+    纸的参考色取"亮度最高的那 10% 像素"的均值 —— 文档里最亮的一定是空白纸。
+    """
+    if bgr.ndim == 2:
+        return bgr
+    gray = _to_gray(bgr)
+    floor = float(np.percentile(gray, 90))
+    mask = gray >= floor
+    if not bool(mask.any()):
+        return bgr
+    means = [float(bgr[..., c][mask].mean()) for c in range(3)]
+    target = max(means)
+    gains = np.float32([target / max(m, 1.0) for m in means])
+    return np.clip(bgr.astype(np.float32) * gains, 0, 255).astype(np.uint8)
 
 
 def stretch_contrast(gray: np.ndarray, clip_low: float, clip_high: float) -> np.ndarray:
@@ -404,15 +475,105 @@ def classify_content(flat_gray: np.ndarray) -> str:
     return MODE_MIXED
 
 
-def _straighten(image: np.ndarray) -> tuple[np.ndarray, bool, float]:
-    """裁正或旋正。返回 (图, 是否透视校正, 旋转角度)。"""
+def _straighten(image: np.ndarray, crop_margin: float = 0.0) -> tuple[np.ndarray, bool, float, str]:
+    """裁正或旋正。返回 (图, 是否透视校正, 旋转角度, 认出的纸张)。
+
+    先专门找**整张 A4/A3 纸**（长宽比 √2）：找到就按标准比例拉平，
+    顾客拍的合同、证明、成绩单基本都是这种，比例已知就能把残留的透视误差也修掉。
+    找不到再退回原来那套"任意四边形"，最后才退到只旋正。
+
+    `crop_margin` 是界面上那个"裁剪边缘"滑块：正数把框往外放（怕裁到内容），
+    负数往里收。用户反馈"有时候裁剪得太过了"，就是给他放这一圈用的。
+    """
+    paper_quad = detect_paper_quad(image)
+    if paper_quad is not None:
+        warped = warp_to_quad(image, _grow_quad(paper_quad, crop_margin))
+        return snap_to_paper_ratio(warped), True, 0.0, PAPER_A4_A3
     quad = detect_page_quad(image)
     if quad is not None:
-        return warp_to_quad(image, quad), True, 0.0
+        return warp_to_quad(image, _grow_quad(quad, crop_margin)), True, 0.0, ""
     degrees = estimate_skew(_to_gray(image))
     if degrees:
-        return rotate(image, degrees), False, degrees
-    return image, False, 0.0
+        return rotate(image, degrees), False, degrees, ""
+    return image, False, 0.0, ""
+
+
+def _grow_quad(quad: np.ndarray, margin: float) -> np.ndarray:
+    """把四边形绕中心等比放大/缩小。margin=0.02 → 四边各往外放 2%。
+
+    往外放会带进一点桌面（warp 时超出照片的部分补白），往里收会切掉纸边 ——
+    这是给人调的，算法自己永远用 0。
+    """
+    if abs(margin) < 1e-4:
+        return quad
+    center = quad.mean(axis=0)
+    grown = center + (quad - center) * (1.0 + 2.0 * margin)
+    return grown.astype(np.float32)
+
+
+def detect_paper_quad(image: np.ndarray) -> np.ndarray | None:
+    """专门找"一整张标准比例的纸"（A4/A3 都是 √2）。找不到返回 None。"""
+    low = PAPER_RATIO * (1.0 - _PAPER_RATIO_TOLERANCE)
+    high = PAPER_RATIO * (1.0 + _PAPER_RATIO_TOLERANCE)
+    return detect_page_quad(image, ratio_range=(low, high))
+
+
+def snap_to_paper_ratio(image: np.ndarray) -> np.ndarray:
+    """把裁出来的纸拉成正好的 √2 比例。
+
+    透视校正之后长宽比总差一两个百分点（四个角找偏几个像素就够了）。
+    既然已经认出是标准纸，就用已知比例把它拉准 —— 长边不动，短边跟着算，
+    这样不丢分辨率也不会把内容拉扁。
+    """
+    height, width = image.shape[:2]
+    if min(height, width) < 8:
+        return image
+    if height >= width:  # 竖着的纸
+        target_w = max(1, round(height / PAPER_RATIO))
+        if abs(target_w - width) <= 1:
+            return image
+        return cv2.resize(image, (target_w, height), interpolation=cv2.INTER_CUBIC)
+    target_h = max(1, round(width / PAPER_RATIO))
+    if abs(target_h - height) <= 1:
+        return image
+    return cv2.resize(image, (width, target_h), interpolation=cv2.INTER_CUBIC)
+
+
+def recolor_by_luma(bgr: np.ndarray, new_gray: np.ndarray) -> np.ndarray:
+    """把处理好的**亮度**贴回彩色图：三个通道按"新亮度/旧亮度"同比缩放。
+
+    这是彩色链路的最后一步，也是**颜色最忠实**的做法：同一个系数乘三个通道，
+    色相和相对饱和度（HSV 里的 H 和 S）一个字节都不变，只有明暗跟着变。
+
+    试过在 LAB 的 L 上做色调、a/b 原样保留 —— 更糟：饱和的红章一提亮就出了
+    sRGB 色域，转回 BGR 时低通道被削到 0，出来是 S=100% 的死红，色相也偏
+    （实测章的饱和度 200 → 250、色相偏 9°）。见 docs/03 的"彩色"一节。
+    """
+    if bgr.ndim == 2:
+        return new_gray
+    old = _to_gray(bgr).astype(np.float32)
+    ratio = new_gray.astype(np.float32) / np.maximum(old, 1.0)
+    out = bgr.astype(np.float32) * ratio[..., None]
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def flatten_illumination_bgr(bgr: np.ndarray) -> np.ndarray:
+    """彩色去阴影：**先做一次全局白平衡，再按同一个光照场把亮度抬平**。
+
+    顺序不能反（实测踩过）：先抬亮的话，纸在 G/R 两个通道上会先顶到 255，
+    再去量"纸是什么颜色"就量不出色偏了（暖光那张实测只修掉三分之一）。
+    先白平衡，纸的三个通道就已经拉齐，再抬亮才干净。
+
+    两步都是"色相安全"的操作：白平衡是三个**全局**常数，抬亮是每个像素乘
+    **同一个**系数（三通道共用一个光照场）。反面教材是各通道自己估背景 ——
+    红章在 R 通道里被"填掉"得多、在 B 通道里少，章的边上会冒出假的青边。
+    """
+    if bgr.ndim == 2:
+        return flatten_illumination(bgr)
+    balanced = white_balance(bgr)
+    field = illumination_field(_to_gray(balanced)).astype(np.float32)
+    lifted = balanced.astype(np.float32) * (255.0 / field)[..., None]
+    return np.clip(lifted, 0, 255).astype(np.uint8)
 
 
 def prepare_for_ocr(image: np.ndarray) -> np.ndarray:
@@ -421,40 +582,94 @@ def prepare_for_ocr(image: np.ndarray) -> np.ndarray:
     **故意不二值化。**过度二值化会吃掉笔画细节，反而降低识别率。
     和"照片变清楚再打印"共用同一条前处理链，见 docs/05-OCR与版面重建.md。
     """
-    work, _, _ = _straighten(image)
+    work, _, _, _ = _straighten(image)
     gray = _to_gray(work)
     return stretch_contrast(flatten_illumination(gray), 1.0, 99.5)
 
 
+def _tone_gray(gray: np.ndarray, mode: str, params: _StrengthParams) -> tuple[np.ndarray, str]:
+    """黑白那条链路：返回 (处理后的灰度, 实际用的模式)。彩色模式也靠它算亮度。"""
+    if mode == MODE_PHOTO:
+        # 真照片的明暗本身就是内容，不能拿去阴影把它抹平；
+        # 只做局部对比增强，避免暗部在黑白机上糊成一团黑。
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        return apply_gamma(clahe.apply(gray), 1.0 + (params.gamma - 1.0) * 0.5), MODE_PHOTO
+
+    flat = stretch_contrast(flatten_illumination(gray), params.clip_low, params.clip_high)
+    if mode == MODE_AUTO:
+        mode = classify_content(flat)
+    if mode == MODE_TEXT:
+        # 这条路不做锐化：锐化会把噪点一起放大，紧接着二值化只会更脏。
+        return binarize_clean(flat, params.threshold_c, params.ink_ceiling), MODE_TEXT
+    return apply_gamma(unsharp(flat, params.unsharp_amount), params.gamma), mode
+
+
+def _tone_color(bgr: np.ndarray, mode: str, params: _StrengthParams) -> tuple[np.ndarray, str]:
+    """彩色链路：**尽量还原文件的原色**，同时不让黑字变灰。
+
+    1. `flatten_illumination_bgr()`：先全局白平衡、再按同一个光照场抬平亮度。
+       "纸变白、色偏消掉"这件事在这一步就做完了
+    2. 亮度算**两版**，按每个像素"有多花"混起来（`spread` = 三通道极差）：
+       - 没颜色的像素（黑字、灰底、白纸）用**重**的那版：对比拉伸 + gamma，
+         字才是实心黑 —— 和黑白那条路一个口味
+       - 有颜色的像素（红章、蓝笔、彩色表头）用**轻**的那版：只轻锐化，
+         几乎不动明暗 —— 重口味会把红章压成近黑（实测亮度 209 → 26，等于毁色）
+    3. 最后 `recolor_by_luma()` 把亮度同比贴回三个通道 —— 色相和相对饱和度不变
+    4. "文字为主"这一档再把**又亮又没颜色**的像素压成纯白；彩色的墨一律留着
+
+    **彩色不二值化**：二值化只剩黑白两色，颜色全丢。
+    """
+    if mode == MODE_PHOTO:
+        # 真照片：不去阴影也不白平衡（明暗和色调本身就是内容），只提局部对比
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        luma = apply_gamma(clahe.apply(_to_gray(bgr)), 1.0 + (params.gamma - 1.0) * 0.5)
+        return recolor_by_luma(bgr, luma), MODE_PHOTO
+
+    balanced = flatten_illumination_bgr(bgr)
+    plain = _to_gray(balanced)
+    if mode == MODE_AUTO:
+        mode = classify_content(plain)
+
+    heavy = apply_gamma(
+        unsharp(stretch_contrast(plain, params.clip_low, params.clip_high), params.unsharp_amount),
+        params.gamma,
+    )
+    light = apply_gamma(
+        unsharp(plain, params.unsharp_amount * 0.5), 1.0 + (params.gamma - 1.0) * 0.25
+    )
+    spread = balanced.max(axis=2).astype(np.int16) - balanced.min(axis=2).astype(np.int16)
+    colorful = np.clip(spread.astype(np.float32) / _COLOR_FULL_SPREAD, 0.0, 1.0)
+    luma = np.clip(
+        heavy.astype(np.float32) * (1.0 - colorful) + light.astype(np.float32) * colorful, 0, 255
+    ).astype(np.uint8)
+
+    out = recolor_by_luma(balanced, luma)
+    if mode == MODE_TEXT:
+        纸 = (luma >= _PAPER_FLOOR) & (spread <= _NEUTRAL_SPREAD)
+        out[纸] = 255
+    return out, mode
+
+
 def enhance(image: np.ndarray, options: EnhanceOptions | None = None) -> EnhanceResult:
-    """完整的去底增强。输入 BGR 或灰度，输出单通道（黑白打印机不需要彩色）。"""
+    """完整的去底增强。
+
+    输入 BGR 或灰度；输出默认是单通道（店里打印机只有黑白），
+    `options.color=True` 时输出 BGR —— 那是给"另存为图片/PDF"用的。
+    """
     opts = options or EnhanceOptions()
     mode = opts.mode if opts.mode in MODES else MODE_AUTO
     params = strength_params(opts.strength)
 
     work = downscale(image, opts.max_side)
-    cropped, rotated = False, 0.0
+    cropped, rotated, paper = False, 0.0, ""
     if opts.deskew:
-        work, cropped, rotated = _straighten(work)
-    gray = _to_gray(work)
+        work, cropped, rotated, paper = _straighten(work, opts.crop_margin)
 
-    if mode == MODE_PHOTO:
-        # 真照片的明暗本身就是内容，不能拿去阴影把它抹平；
-        # 只做局部对比增强，避免暗部在黑白机上糊成一团黑。
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        out = apply_gamma(clahe.apply(gray), 1.0 + (params.gamma - 1.0) * 0.5)
-        return EnhanceResult(out, MODE_PHOTO, cropped, rotated)
-
-    flat = stretch_contrast(flatten_illumination(gray), params.clip_low, params.clip_high)
-    if mode == MODE_AUTO:
-        mode = classify_content(flat)
-
-    if mode == MODE_TEXT:
-        # 这条路不做锐化：锐化会把噪点一起放大，紧接着二值化只会更脏。
-        out = binarize_clean(flat, params.threshold_c, params.ink_ceiling)
+    if opts.color and work.ndim == 3:
+        out, mode_used = _tone_color(work, mode, params)
     else:
-        out = apply_gamma(unsharp(flat, params.unsharp_amount), params.gamma)
-    return EnhanceResult(out, mode, cropped, rotated)
+        out, mode_used = _tone_gray(_to_gray(work), mode, params)
+    return EnhanceResult(out, mode_used, cropped, rotated, paper)
 
 
 def enhance_file(path: str | Path, options: EnhanceOptions | None = None) -> EnhanceResult:
@@ -495,6 +710,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("image", type=Path, help="图片路径")
     parser.add_argument("--mode", choices=MODES, default=MODE_AUTO)
     parser.add_argument("--strength", type=int, default=50, help="0（淡）– 100（浓）")
+    parser.add_argument("--color", action="store_true", help="出彩色（默认黑白）")
     parser.add_argument("--no-deskew", action="store_true", help="关掉自动裁正/旋正")
     parser.add_argument("--max-side", type=int, default=None, help="先缩到这个长边（模拟预览）")
     parser.add_argument("-o", "--out", type=Path, default=None, help="对比图输出路径")
@@ -518,6 +734,7 @@ def main(argv: list[str] | None = None) -> int:
             strength=args.strength,
             deskew=not args.no_deskew,
             max_side=args.max_side,
+            color=args.color,
         ),
     )
 
@@ -527,8 +744,9 @@ def main(argv: list[str] | None = None) -> int:
     h, w = result.image.shape[:2]
     print(
         f"模式={result.mode_used} 强度={args.strength} "
+        f"{'彩色' if result.is_color else '黑白'} "
         f"裁正={'是' if result.cropped else '否'} 旋转={result.rotated_deg:.2f}° "
-        f"尺寸={w}x{h}\n已保存：{out_path}"
+        f"纸张={result.paper or '（没认出）'} 尺寸={w}x{h}\n已保存：{out_path}"
     )
     return 0
 

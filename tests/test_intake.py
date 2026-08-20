@@ -18,11 +18,12 @@ from shop_print.core import intake
 
 
 @pytest.fixture
-def 收件目录(tmp_path, monkeypatch):
-    inbox = tmp_path / "待打印"
-    inbox.mkdir()
-    monkeypatch.setattr(paths, "INBOX_DIR", inbox)
-    return inbox
+def 工作区(tmp_path, monkeypatch):
+    """把默认工作区指到临时目录。配置里没填路径时用的就是这个默认值。"""
+    workspace = tmp_path / "待打印"
+    workspace.mkdir()
+    monkeypatch.setattr(paths, "WORKSPACE_DIR", workspace)
+    return workspace
 
 
 def 造文件(path: Path, size: int = 1024) -> Path:
@@ -113,16 +114,16 @@ def test_目录不存在也不报错(tmp_path) -> None:
 
 
 # ── 监控哪些目录 ────────────────────────────────────────────────
-def test_待打印目录排在最前面(收件目录, tmp_path, monkeypatch) -> None:
+def test_工作区目录排在最前面(工作区, tmp_path, monkeypatch) -> None:
     """长辈最常用的那个要排第一。"""
     微信 = tmp_path / "微信接收"
     微信.mkdir()
     dirs = intake.watch_dirs(IntakeConfig(watch_wechat=True, wechat_dirs=[str(微信)]))
-    assert dirs[0] == 收件目录
+    assert dirs[0] == 工作区
     assert 微信 in dirs
 
 
-def test_配置里手填的微信目录优先于自动探测(收件目录, tmp_path, monkeypatch) -> None:
+def test_配置里手填的微信目录优先于自动探测(工作区, tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(intake, "detect_wechat_dirs", lambda: [tmp_path / "自动探测到的"])
     手填 = tmp_path / "手填的"
     手填.mkdir()
@@ -131,19 +132,19 @@ def test_配置里手填的微信目录优先于自动探测(收件目录, tmp_p
     assert (tmp_path / "自动探测到的") not in dirs
 
 
-def test_关掉开关就不监控(收件目录, monkeypatch) -> None:
+def test_关掉开关就不监控(工作区, monkeypatch) -> None:
     monkeypatch.setattr(intake, "detect_wechat_dirs", lambda: [Path("C:/不该出现")])
-    assert intake.watch_dirs(IntakeConfig(watch_inbox=False, watch_wechat=False)) == []
+    assert intake.watch_dirs(IntakeConfig(watch_workspace=False, watch_wechat=False)) == []
 
 
-def test_重复目录只留一份(收件目录) -> None:
-    config = IntakeConfig(wechat_dirs=[str(收件目录), str(收件目录).upper()])
+def test_重复目录只留一份(工作区) -> None:
+    config = IntakeConfig(wechat_dirs=[str(工作区), str(工作区).upper()])
     assert len(intake.watch_dirs(config)) == 1
 
 
-def test_填了不存在的目录会被忽略(收件目录) -> None:
+def test_填了不存在的目录会被忽略(工作区) -> None:
     dirs = intake.watch_dirs(IntakeConfig(wechat_dirs=["Z:/没有这个盘/微信"]))
-    assert dirs == [收件目录]
+    assert dirs == [工作区]
 
 
 def test_探测微信两代布局(tmp_path, monkeypatch) -> None:
@@ -264,10 +265,10 @@ def test_真的监控目录能收到新文件(tmp_path) -> None:
 
 
 # ── 剪贴板 / 存图 ───────────────────────────────────────────────
-def test_粘贴的图片存进待打印目录(收件目录) -> None:
+def test_粘贴的图片存进工作区(工作区) -> None:
     image = np.full((40, 30, 3), 200, dtype=np.uint8)
     saved = intake.save_incoming_image(image, stem="粘贴的图片")
-    assert saved.parent == 收件目录
+    assert saved.parent == 工作区
     assert saved.suffix == ".png"
     assert saved.stat().st_size > 0
     assert "粘贴的图片" in saved.name
@@ -300,3 +301,29 @@ def test_剪贴板里是文件列表时按文件处理(tmp_path, monkeypatch) ->
     )
     assert intake.clipboard_image() is None  # 是文件不是图
     assert [s.name for s in intake.clipboard_files()] == ["合同.pdf"]
+
+
+# ── 拖进来 / 粘贴过来的文件先落进工作区（用户反馈的第 4 条）─────────
+def test_拖进来的文件拷进工作区(工作区, tmp_path) -> None:
+    """工作区页面列的是"工作区里有什么"。文件还在桌面上的话列表里看不到它，
+    长辈就以为拖丢了 —— 所以先拷过来，也就成了"历史工作区"。"""
+    桌面 = tmp_path / "桌面"
+    源 = 造文件(桌面 / "顾客发来的.pdf")
+    拷好的 = intake.copy_into_workspace([源], 工作区)
+    assert 拷好的 == [工作区 / "顾客发来的.pdf"]
+    assert 拷好的[0].exists()
+    assert 源.exists()  # 原文件不动，只是拷一份
+
+
+def test_同名文件不覆盖(工作区, tmp_path) -> None:
+    造文件(工作区 / "合同.pdf", size=10)
+    源 = 造文件(tmp_path / "别处" / "合同.pdf", size=20)
+    拷好的 = intake.copy_into_workspace([源], 工作区)
+    assert 拷好的 == [工作区 / "合同-2.pdf"]
+    assert (工作区 / "合同.pdf").stat().st_size == 10  # 老的原样在
+
+
+def test_本来就在工作区里的不再拷一份(工作区) -> None:
+    源 = 造文件(工作区 / "已经在里面.jpg")
+    assert intake.copy_into_workspace([源], 工作区) == [源]
+    assert len(list(工作区.glob("*.jpg"))) == 1

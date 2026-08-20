@@ -92,10 +92,18 @@ class NumberStepper(QWidget):
     valueChanged = Signal(int)
 
     def __init__(
-        self, minimum: int = 1, maximum: int = 99, value: int = 1, parent: QWidget | None = None
+        self,
+        minimum: int = 1,
+        maximum: int = 99,
+        value: int = 1,
+        parent: QWidget | None = None,
+        step: int = 1,
+        suffix: str = "",
     ) -> None:
         super().__init__(parent)
         self._min, self._max = minimum, maximum
+        self._step = max(1, step)
+        self._suffix = suffix
         self._value = max(minimum, min(value, maximum))
 
         self._minus = QPushButton("−")
@@ -103,7 +111,7 @@ class NumberStepper(QWidget):
         for button in (self._minus, self._plus):
             button.setProperty("role", "stepper")
             button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._display = QLabel(str(self._value))
+        self._display = QLabel(self._text())
         self._display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._display.setStyleSheet("font-size: 26pt; font-weight: bold; min-width: 72px;")
 
@@ -114,9 +122,12 @@ class NumberStepper(QWidget):
         layout.addWidget(self._display)
         layout.addWidget(self._plus)
 
-        self._minus.clicked.connect(lambda: self.set_value(self._value - 1))
-        self._plus.clicked.connect(lambda: self.set_value(self._value + 1))
+        self._minus.clicked.connect(lambda: self.set_value(self._value - self._step))
+        self._plus.clicked.connect(lambda: self.set_value(self._value + self._step))
         self._sync()
+
+    def _text(self) -> str:
+        return f"{self._value}{self._suffix}"
 
     def value(self) -> int:
         return self._value
@@ -126,7 +137,7 @@ class NumberStepper(QWidget):
         if value == self._value:
             return
         self._value = value
-        self._display.setText(str(value))
+        self._display.setText(self._text())
         self._sync()
         self.valueChanged.emit(value)
 
@@ -223,11 +234,21 @@ class ChoiceGroup(QWidget):
 
 
 class StrengthSlider(QWidget):
-    """「淡 ←→ 浓」。整个增强功能只暴露这一个可调项，不显示数值。"""
+    """两端写字、中间一条滑块，不显示数值。默认是「淡 ←→ 浓」。
+
+    别的地方也用它（比如证件页的深浅、照片页的"裁剪边缘 紧 ←→ 松"），
+    两端的字换一下就行 —— 长辈看得懂"往哪边拉"，看不懂百分数。
+    """
 
     changed = Signal(int)
 
-    def __init__(self, value: int = 50, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        value: int = 50,
+        parent: QWidget | None = None,
+        low_label: str = texts.STRENGTH_LIGHT,
+        high_label: str = texts.STRENGTH_HEAVY,
+    ) -> None:
         super().__init__(parent)
         self._slider = QSlider(Qt.Orientation.Horizontal)
         self._slider.setRange(0, 100)
@@ -239,13 +260,13 @@ class StrengthSlider(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        light = QLabel(texts.STRENGTH_LIGHT)
-        heavy = QLabel(texts.STRENGTH_HEAVY)
-        for label in (light, heavy):
+        low = QLabel(low_label)
+        high = QLabel(high_label)
+        for label in (low, high):
             label.setStyleSheet("font-size: 18pt;")
-        layout.addWidget(light)
+        layout.addWidget(low)
         layout.addWidget(self._slider, stretch=1)
-        layout.addWidget(heavy)
+        layout.addWidget(high)
 
     def value(self) -> int:
         return self._slider.value()

@@ -317,3 +317,40 @@ def test_excel宽表不会被切成几十页(tmp_path) -> None:
     out = convert.to_pdf(src)
     with pymupdf.open(out) as doc:
         assert doc.page_count == 1
+
+
+# ── 处理好的图直接落成 PDF（「照片变清楚」的「保存成 PDF」）─────────
+def test_一张图存成一页A4的PDF(tmp_path) -> None:
+    import numpy as np
+
+    图 = np.full((1400, 990), 220, dtype=np.uint8)  # 竖着的、接近 A4 比例
+    out = convert.image_to_pdf(图, tmp_path / "存出来.pdf")
+    with pymupdf.open(out) as doc:
+        assert doc.page_count == 1
+        页 = doc[0]
+        宽mm, 高mm = 页.rect.width / (72 / 25.4), 页.rect.height / (72 / 25.4)
+        assert (round(宽mm), round(高mm)) == (210, 297)
+        框 = 页.get_image_info()[0]["bbox"]
+        assert 框[2] - 框[0] <= 页.rect.width  # 图在页内，没出边
+        assert 框[3] - 框[1] <= 页.rect.height
+
+
+def test_横着的图自动用横向纸(tmp_path) -> None:
+    import numpy as np
+
+    out = convert.image_to_pdf(np.full((800, 1200), 230, dtype=np.uint8), tmp_path / "横.pdf")
+    with pymupdf.open(out) as doc:
+        assert doc[0].rect.width > doc[0].rect.height
+
+
+def test_彩色图存出来的PDF是彩色的(tmp_path) -> None:
+    import numpy as np
+
+    图 = np.zeros((600, 400, 3), dtype=np.uint8)
+    图[..., 2] = 220  # BGR 里的红
+    out = convert.image_to_pdf(图, tmp_path / "红.pdf")
+    with pymupdf.open(out) as doc:
+        pix = doc[0].get_pixmap(dpi=72)
+        assert pix.n >= 3
+        中心 = pix.pixel(pix.width // 2, pix.height // 2)
+        assert 中心[0] - 中心[2] > 60, f"中间那块应该是红的，实际 {中心}"

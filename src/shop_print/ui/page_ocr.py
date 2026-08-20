@@ -4,6 +4,9 @@
 - 结果是可编辑的，长辈能直接改错字
 - 置信度低的段落标红，提示核对
 - 文案不说"转换完成"，说"请核对一下文字有没有认错"
+
+首页卡片点进来**先到这一页**（不再一上来就弹文件对话框）：左边那块空地
+点一下选图片、拖一张进来也行 —— 用户反馈的第 3 条。
 """
 
 from __future__ import annotations
@@ -20,17 +23,20 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from .. import paths, texts
+from .. import config as config_mod
+from .. import texts
 from ..config import AppConfig
+from ..core import convert, ocr, ocr_cloud
 from ..core import enhance as enhance_mod
-from ..core import ocr, ocr_cloud
 from .page_base import SubPage
 from .widgets.big import PrimaryButton
+from .widgets.dropzone import DropFrame, ImageDropZone
 from .widgets.preview import ImagePreview
 from .workers import run_async
 
@@ -47,7 +53,23 @@ class OcrPage(SubPage):
         self._result: ocr.OcrResult | None = None
         self._original_text = ""
 
+        # 左边这块：还没选图时是"点这里选图片"的空地，选好之后换成原图。
+        # 首页卡片点进来不再弹文件对话框（用户反馈的第 3 条）——**先进页面再选图**
         self._preview = ImagePreview("选好照片之后这里显示原图")
+        self._zone = ImageDropZone()
+        self._preview_frame = DropFrame()
+        self._preview_frame.setProperty("role", "plain")
+        self._preview_frame.setToolTip(texts.PICK_ANOTHER_HINT)
+        frame_layout = QVBoxLayout(self._preview_frame)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.addWidget(self._preview)
+        self._left_stack = QStackedWidget()
+        self._left_stack.addWidget(self._zone)
+        self._left_stack.addWidget(self._preview_frame)
+        for zone in (self._zone, self._preview_frame):
+            zone.pickRequested.connect(self._pick)
+            zone.dropped.connect(self.load)
+
         self._editor = QTextEdit()
         self._editor.setPlaceholderText("识别出来的文字会显示在这里，可以直接修改")
 
@@ -61,7 +83,9 @@ class OcrPage(SubPage):
         self._save_button.clicked.connect(self._save)
 
         self._open_folder = QPushButton(texts.BTN_OPEN_FOLDER)
-        self._open_folder.clicked.connect(lambda: open_in_explorer(paths.output_dir()))
+        self._open_folder.clicked.connect(
+            lambda: open_in_explorer(config_mod.save_dir(self._config.output))
+        )
 
         self._cloud_button = QPushButton("高精度识别")
         self._cloud_button.clicked.connect(self._recognize_cloud)
@@ -69,7 +93,7 @@ class OcrPage(SubPage):
 
         middle = QHBoxLayout()
         middle.setSpacing(20)
-        middle.addWidget(self._preview, stretch=2)
+        middle.addWidget(self._left_stack, stretch=2)
 
         right = QVBoxLayout()
         right.setSpacing(10)
@@ -98,13 +122,26 @@ class OcrPage(SubPage):
         )
 
     # ── 外部入口 ────────────────────────────────────────────────
-    def load(self, path: Path) -> None:
+    def load(self, path: Path | None = None) -> None:
+        """`None` = 还没选图，显示那块"点这里选图片"的空地。"""
+        if path is None:
+            self._source = None
+            self._result = None
+            self.set_title(texts.HOME_CARD_OCR_TITLE)
+            self._editor.clear()
+            self._low_confidence_hint.hide()
+            self._save_button.setEnabled(False)
+            self._left_stack.setCurrentWidget(self._zone)
+            self.clear_status()
+            return
+
         self._source = Path(path)
         self._result = None
         self.set_title(f"{texts.HOME_CARD_OCR_TITLE} —— {self._source.name}")
         self._editor.clear()
         self._low_confidence_hint.hide()
         self._save_button.setEnabled(False)
+        self._left_stack.setCurrentWidget(self._preview_frame)
 
         run_async(
             enhance_mod.load_image,
@@ -119,6 +156,14 @@ class OcrPage(SubPage):
             on_done=self._on_recognized,
             on_failed=self.show_error,
         )
+
+    def _pick(self) -> None:
+        """开"选图片"对话框，默认打开工作区文件夹（设置里配的那个）。"""
+        suffixes = " ".join(f"*{s}" for s in sorted(convert.IMAGE_SUFFIXES))
+        start = config_mod.workspace_dir(self._config.intake)
+        path, _ = QFileDialog.getOpenFileName(self, "选择照片", str(start), f"图片 ({suffixes})")
+        if path:
+            self.load(Path(path))
 
     def _on_recognized(self, result: ocr.OcrResult) -> None:
         self._result = result
@@ -152,24 +197,25 @@ class OcrPage(SubPage):
 
     # ── 保存 ────────────────────────────────────────────────────
     def _save(self) -> None:
-        """另存为：让长辈自己选存哪儿（默认在"我的文档"），文件名默认用原图名。
+        """另存为：让长辈自己选存哪儿，文件名默认用原图名。
 
+        对话框默认开在"上次存过的文件夹"，没有就用设置里配的保存位置。
         原来是悄悄存到 %LOCALAPPDATA% 下面的 output 目录 —— 那个路径长辈根本
         找不到，只能靠「打开文件夹」按钮。改成标准的另存为对话框更直观。
         """
         if self._source is None or self._result is None:
             return
-        默认目录 = self._config.ocr.last_save_dir or str(Path.home() / "Documents")
+        默认目录 = config_mod.dialog_dir(self._config.output)
         target, _ = QFileDialog.getSaveFileName(
             self,
             "另存为 Word 文档",
-            str(Path(默认目录) / f"{self._source.stem}.docx"),
+            str(默认目录 / f"{self._source.stem}.docx"),
             "Word 文档 (*.docx)",
         )
         if not target:
             return
         目标 = Path(target)
-        self._config.ocr.last_save_dir = str(目标.parent)
+        self._config.output.last_save_dir = str(目标.parent)
 
         edited = self._editor.toPlainText()
         result = (
@@ -225,7 +271,7 @@ class OcrPage(SubPage):
     def _do_cloud(self, source: Path) -> Path:
         image = enhance_mod.prepare_for_ocr(enhance_mod.load_image(source))
         markdown = ocr_cloud.recognize(image, self._config.ocr)
-        target_dir = paths.output_dir()
+        target_dir = config_mod.save_dir(self._config.output)
         return ocr_cloud.markdown_to_docx(markdown, target_dir / f"{source.stem}-高精度.docx")
 
     def _on_cloud_done(self, docx_path: Path) -> None:

@@ -29,6 +29,8 @@ from shop_print.ui.main_window import MainWindow  # noqa: E402
 
 OUT = ROOT / "docs" / "images"
 WINDOW = (1280, 830)
+# 截图用的"工作区"就用默认那个（C:\打印\待打印）—— 插图里出现的路径要和交付件一致
+WORKSPACE = paths.WORKSPACE_DIR
 # 对比图缩到这个长边再存：全分辨率有 1.3 MB，插图不值得让仓库背这个体积
 _COMPARISON_MAX_SIDE = 1600
 # 后台线程（增强预览、OCR）要时间出结果，截图前得等它
@@ -56,7 +58,7 @@ def _enhance_comparison(sample: Path) -> None:
 def main() -> int:
     OUT.mkdir(parents=True, exist_ok=True)
     paths.ensure_runtime_dirs()
-    paths.ensure_inbox_dir()
+    paths.ensure_workspace_dir()
 
     sample_dir = paths.output_dir() / "截图样张"
     sample_dir.mkdir(parents=True, exist_ok=True)
@@ -74,8 +76,8 @@ def main() -> int:
     app.setStyleSheet(paths.style_file().read_text(encoding="utf-8"))
 
     # 往「待打印」里放两个假文件，好让收件页显示真实的文件卡片
-    demo = [paths.INBOX_DIR / "身份证正反面.png", paths.INBOX_DIR / "租房合同扫描件.pdf"]
-    if paths.INBOX_DIR.is_dir():
+    demo = [WORKSPACE / "身份证正反面.png", WORKSPACE / "租房合同扫描件.pdf"]
+    if WORKSPACE.is_dir():
         enhance_mod.save_image(photographed_text_document(seed=3), demo[0])
         demo[1].write_bytes(convert.to_pdf(demo[0]).read_bytes())
 
@@ -90,7 +92,7 @@ def main() -> int:
         ("照片转文字", lambda: window.open_ocr(sample)),
         ("证件二合一", lambda: window.open_cards([card_front, card_back])),
         ("打印预览", lambda: window.open_print([sample])),
-        ("微信收到的文件", window.open_inbox),
+        ("工作区", window.open_workspace),
     ):
         action()
         _settle(app)
@@ -99,12 +101,21 @@ def main() -> int:
         window.grab().save(str(OUT / f"{name}.png"))
         print(f"已截图 {name}.png")
 
-    # 最坏情况：店铺机可能是 1366×768，窗口只能给到 1024×640
+    # 最坏情况：店铺机可能是 1366×768，窗口只能给到 1024×640。
+    # 证件页控件最多（类型 6 个 + 两个图片框 + 深浅），最容易在小屏上把预览挤没，
+    # 所以这一页也留一张小屏图钉住布局。
     window.resize(1024, 640)
     window.open_photo(sample)
     _settle(app, steps=60)
     window.grab().save(str(OUT / "小屏-照片变清楚.png"))
     print("已截图 小屏-照片变清楚.png")
+
+    window.open_cards([card_front, card_back])
+    _settle(app)
+    window.repaint()
+    _settle(app, steps=4)
+    window.grab().save(str(OUT / "小屏-证件印一张纸.png"))
+    print("已截图 小屏-证件印一张纸.png")
 
     window.close()  # closeEvent 里会停掉目录监控
     _settle(app, steps=10)

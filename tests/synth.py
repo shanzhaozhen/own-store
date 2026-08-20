@@ -137,6 +137,62 @@ def photographed_text_document(seed: int = 0, shadow: float = 0.5) -> np.ndarray
     return np.dstack([gray, gray, gray])
 
 
+def paper_photo(
+    seed: int = 0,
+    *,
+    margin: int = 90,
+    tilt: float = 3.0,
+    stamp: bool = False,
+) -> np.ndarray:
+    """合成"桌面上的一整张 A4 纸"：深色桌面 + 拍歪一点的白纸。返回 BGR。
+
+    用来验 `enhance._straighten` 认纸那一步：纸的长宽比是 √2（A4 和 A3 一样），
+    认出来之后要把它裁出来、拉成标准比例。`stamp=True` 会盖一个**红色印章**，
+    用来验彩色那条路把红章留住了（黑白那条路会把它变成灰的）。
+    """
+    import cv2
+
+    页 = add_noise(add_paper_tint(add_shadow(text_document(), strength=0.35)), seed=seed)
+    彩页 = cv2.cvtColor(页, cv2.COLOR_GRAY2BGR)
+    if stamp:
+        高, 宽 = 页.shape[:2]
+        中心 = (int(宽 * 0.72), int(高 * 0.82))
+        半径 = int(min(高, 宽) * 0.09)
+        cv2.circle(彩页, 中心, 半径, (40, 40, 210), thickness=max(3, 半径 // 8))  # BGR 的红
+        cv2.line(
+            彩页,
+            (中心[0] - 半径 // 2, 中心[1]),
+            (中心[0] + 半径 // 2, 中心[1]),
+            (40, 40, 210),
+            thickness=max(2, 半径 // 10),
+        )
+
+    高, 宽 = 彩页.shape[:2]
+    桌 = np.zeros((高 + margin * 2, 宽 + margin * 2, 3), dtype=np.uint8)
+    桌[..., 0], 桌[..., 1], 桌[..., 2] = 70, 88, 104  # 冷灰的桌面，和白纸分得开
+    桌 = add_noise(桌, sigma=3.0, seed=seed + 1)
+
+    # 拍歪：把纸的四角挪一点，做出透视
+    rng = np.random.default_rng(seed)
+    源 = np.float32([[0, 0], [宽 - 1, 0], [宽 - 1, 高 - 1], [0, 高 - 1]])
+    抖 = rng.uniform(-1.0, 1.0, (4, 2)).astype(np.float32) * (margin * 0.35)
+    目标 = np.float32(
+        [
+            [margin, margin],
+            [margin + 宽 - 1, margin],
+            [margin + 宽 - 1, margin + 高 - 1],
+            [margin, margin + 高 - 1],
+        ]
+    )
+    目标 = 目标 + 抖 + np.float32([[tilt, -tilt], [tilt, tilt], [-tilt, tilt], [-tilt, -tilt]])
+    矩阵 = cv2.getPerspectiveTransform(源, 目标)
+    warped = cv2.warpPerspective(彩页, 矩阵, (桌.shape[1], 桌.shape[0]), borderValue=(0, 0, 0))
+    掩膜 = cv2.warpPerspective(
+        np.full((高, 宽), 255, np.uint8), 矩阵, (桌.shape[1], 桌.shape[0]), borderValue=0
+    )
+    return np.where(掩膜[..., None] > 127, warped, 桌)
+
+
 def card_photo(
     width_mm: float = 85.6,
     height_mm: float = 54.0,
@@ -147,11 +203,14 @@ def card_photo(
     seed: int = 0,
     portrait: bool = False,
 ) -> np.ndarray:
-    """合成一张"桌面上的证件照片"：深色桌面上一张浅色卡片，卡片上有字和头像框。
+    """合成一张"桌面上的证件照片"：**暖色木桌**上一张浅色卡片，卡片上有字和头像框。
 
-    用来验证证件二合一那条链路：抠卡片 → 透视校正 → 按长宽比认出尺寸 →
-    按毫米摆到纸上。`px_per_mm` 只影响卡片在照片里的像素大小，
-    **算法不该依赖它** —— 手机照片里没有"每毫米多少像素"这个信息。
+    桌面刻意做成有饱和度的棕色、卡片做成低饱和的浅色 —— `cards._card_mask()`
+    就是靠"又亮又不鲜艳"把卡片抠出来的（真实照片实测：卡片 S≈32、木桌 S≈68）。
+    早先这里画的是纯灰桌面，抠图那条路根本没被测到。
+
+    `px_per_mm` 只影响卡片在照片里的像素大小，**算法不该依赖它** ——
+    手机照片里没有"每毫米多少像素"这个信息。
     """
     import cv2
 
@@ -163,8 +222,14 @@ def card_photo(
     canvas_w, canvas_h = card_w + margin * 2, card_h + margin * 2
 
     rng = np.random.default_rng(seed)
-    desk = np.full((canvas_h, canvas_w), 90, dtype=np.uint8)  # 深色桌面，和卡片有明显反差
-    desk = add_noise(desk, sigma=3.0, seed=seed)
+    # 木桌：BGR 里偏棕（蓝少红多），带一点竖纹
+    desk = np.zeros((canvas_h, canvas_w, 3), dtype=np.uint8)
+    desk[..., 0], desk[..., 1], desk[..., 2] = 78, 104, 138
+    纹 = (np.sin(np.linspace(0, 60, canvas_w)) * 8).astype(np.int16)
+    desk = np.clip(desk.astype(np.int16) + 纹[None, :, None], 0, 255).astype(np.uint8)
+    desk = np.clip(
+        desk.astype(np.int16) + rng.normal(0, 3, desk.shape).astype(np.int16), 0, 255
+    ).astype(np.uint8)
 
     card = Image.new("L", (card_w, card_h), 236)
     draw = ImageDraw.Draw(card)
@@ -179,22 +244,30 @@ def card_photo(
         draw.rectangle([int(card_w * 0.36), y, right, y + line_h], fill=40)
         y += line_h * 3
 
+    # 四角是**圆的**（ISO 7810 是 3.18mm）—— 贴上去的时候圆角处要露出桌面，
+    # 不然"裁成方框会露出桌面色、得涂白"这条根本测不到
+    圆角 = max(1, round(3.18 * px_per_mm))
+    形 = Image.new("L", (card_w, card_h), 0)
+    ImageDraw.Draw(形).rounded_rectangle([0, 0, card_w - 1, card_h - 1], radius=圆角, fill=255)
+
     patch = np.array(card)
+    mask = np.array(形)
     if tilt:
         patch = _rotate_keep(patch, tilt, fill=236)
+        mask = _rotate_keep(mask, tilt, fill=0)  # 旋转后的四角是背景，掩膜跟着转
         card_h, card_w = patch.shape[:2]
 
     top, left = (canvas_h - card_h) // 2, (canvas_w - card_w) // 2
-    if tilt:
-        # 旋转后的四角是背景色，用掩膜只贴卡片本体
-        mask = _rotate_keep(np.full((card.height, card.width), 255, np.uint8), tilt, fill=0)
-        region = desk[top : top + card_h, left : left + card_w]
-        desk[top : top + card_h, left : left + card_w] = np.where(mask > 127, patch, region)
-    else:
-        desk[top : top + card_h, left : left + card_w] = patch
+    区域 = desk[top : top + card_h, left : left + card_w]
+    desk[top : top + card_h, left : left + card_w] = np.where(
+        mask[..., None] > 127, cv2.cvtColor(patch, cv2.COLOR_GRAY2BGR), 区域
+    )
 
-    dirty = add_noise(add_paper_tint(add_shadow(desk, strength=0.3), amount=0.06), seed=seed)
-    return cv2.cvtColor(dirty, cv2.COLOR_GRAY2BGR)
+    gray = cv2.cvtColor(desk, cv2.COLOR_BGR2GRAY)
+    dirty = add_noise(add_paper_tint(add_shadow(gray, strength=0.3), amount=0.06), seed=seed)
+    # 把明暗变化按比例带回彩色图，保留桌面的饱和度差异
+    ratio = np.divide(dirty.astype(np.float32), np.maximum(gray, 1), dtype=np.float32)
+    return np.clip(desk.astype(np.float32) * ratio[..., None], 0, 255).astype(np.uint8)
 
 
 def _rotate_keep(gray: np.ndarray, degrees: float, fill: int) -> np.ndarray:

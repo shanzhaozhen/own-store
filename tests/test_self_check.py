@@ -31,7 +31,7 @@ def test_报告写进日志目录_而且是utf8(跳过慢检查) -> None:
     text = report.read_text(encoding="utf-8")
     assert "自检报告" in text
     assert "随包资源" in text
-    assert "待打印文件夹" in text
+    assert "工作区文件夹" in text
 
 
 def test_模型丢了会报致命错(跳过慢检查, monkeypatch, tmp_path) -> None:

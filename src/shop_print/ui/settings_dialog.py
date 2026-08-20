@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -25,12 +27,42 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import config as config_mod
 from .. import paths
 from ..config import AppConfig
 from ..core import intake, ocr_cloud, printing
 from .page_ocr import open_in_explorer
 
 logger = logging.getLogger(__name__)
+
+
+class FolderRow(QWidget):
+    """一行"文件夹路径 + 选择… + 打开"。留空 = 用默认值（提示里写着默认是哪儿）。"""
+
+    def __init__(self, value: str, default: Path, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._default = default
+        self._edit = QLineEdit(value)
+        self._edit.setPlaceholderText(f"留空 = {default}")
+        pick = QPushButton("选择…")
+        pick.clicked.connect(self._pick)
+        show = QPushButton("打开")
+        show.clicked.connect(lambda: open_in_explorer(Path(self.value() or str(default))))
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(self._edit, stretch=1)
+        row.addWidget(pick)
+        row.addWidget(show)
+
+    def value(self) -> str:
+        return self._edit.text().strip()
+
+    def _pick(self) -> None:
+        start = self.value() or str(self._default)
+        chosen = QFileDialog.getExistingDirectory(self, "选择文件夹", start)
+        if chosen:
+            self._edit.setText(chosen)
 
 
 class SettingsDialog(QDialog):
@@ -66,10 +98,13 @@ class SettingsDialog(QDialog):
         self._price.setSingleStep(0.1)
         self._price.setValue(config.printing.price_per_page)
 
-        self._watch_inbox = QCheckBox(f"监控「{paths.INBOX_DIR}」")
-        self._watch_inbox.setChecked(config.intake.watch_inbox)
+        self._workspace = FolderRow(config.intake.workspace_dir, paths.WORKSPACE_DIR)
+        self._watch_workspace = QCheckBox("盯着工作区文件夹，有新文件就提示")
+        self._watch_workspace.setChecked(config.intake.watch_workspace)
         self._watch_wechat = QCheckBox("监控微信接收目录")
         self._watch_wechat.setChecked(config.intake.watch_wechat)
+
+        self._save_dir = FolderRow(config.output.dir, paths.output_dir())
 
         self._wechat_dirs = QPlainTextEdit("\n".join(config.intake.wechat_dirs))
         self._wechat_dirs.setPlaceholderText("一行一个目录；留空则自动探测")
@@ -99,7 +134,9 @@ class SettingsDialog(QDialog):
         form.addRow("打印分辨率 (dpi)", self._dpi)
         form.addRow("打印后端", self._backend)
         form.addRow("每张收费（元）", self._price)
-        form.addRow(self._watch_inbox)
+        form.addRow("工作区文件夹", self._workspace)
+        form.addRow("保存到哪个文件夹", self._save_dir)
+        form.addRow(self._watch_workspace)
         form.addRow(self._watch_wechat)
         form.addRow("微信目录（手填优先）", self._wechat_dirs)
         form.addRow("", detected)
@@ -137,13 +174,18 @@ class SettingsDialog(QDialog):
         self._config.printing.dpi = self._dpi.value()
         self._config.printing.backend = self._backend.currentData() or "gdi"
         self._config.printing.price_per_page = float(self._price.value())
-        self._config.intake.watch_inbox = self._watch_inbox.isChecked()
+        self._config.intake.workspace_dir = self._workspace.value()
+        self._config.intake.watch_workspace = self._watch_workspace.isChecked()
         self._config.intake.watch_wechat = self._watch_wechat.isChecked()
         self._config.intake.wechat_dirs = [
             line.strip() for line in self._wechat_dirs.toPlainText().splitlines() if line.strip()
         ]
         self._config.intake.recent_days = self._recent_days.value()
+        self._config.output.dir = self._save_dir.value()
         self._config.ocr.cloud_provider = self._cloud_provider.currentData() or ""
         self._config.ocr.cloud_api_key = self._cloud_key.text().strip()
         self._config.ocr.cloud_endpoint = self._cloud_endpoint.text().strip()
+        # 路径改了就先把目录建出来，别等到保存文件时才发现建不了
+        config_mod.workspace_dir(self._config.intake)
+        config_mod.save_dir(self._config.output)
         self.accept()

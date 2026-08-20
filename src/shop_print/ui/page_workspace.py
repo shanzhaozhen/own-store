@@ -1,7 +1,8 @@
-"""微信收到的文件。新文件自动出现在这里，长辈不用去文件夹里翻。
+"""工作区：店里放待打印文件的那个文件夹，加上微信收到的文件，都列在这里。
 
-监控哪些目录、为什么聊天里的图片要走"粘贴"而不是监控，见 core/intake.py
-和 docs/01-环境与设备.md。
+新文件自动出现，长辈不用去文件夹里翻。工作区路径在设置里可以改
+（默认 `C:\\打印\\待打印`）；监控哪些目录、为什么聊天里的图片要走"粘贴"
+而不是监控，见 core/intake.py 和 docs/01-环境与设备.md。
 """
 
 from __future__ import annotations
@@ -20,7 +21,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import paths, texts
+from .. import config as config_mod
+from .. import texts
 from ..config import AppConfig
 from ..core import intake
 from .page_base import SubPage
@@ -103,7 +105,7 @@ class FileCard(QFrame):
         layout.addWidget(print_button)
 
 
-class InboxPage(SubPage):
+class WorkspacePage(SubPage):
     printRequested = Signal(list)
     enhanceRequested = Signal(object)
     ocrRequested = Signal(object)
@@ -111,16 +113,11 @@ class InboxPage(SubPage):
     pasteRequested = Signal()
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
-        super().__init__(texts.HOME_CARD_INBOX_TITLE, parent)
+        super().__init__(texts.HOME_CARD_WORKSPACE_TITLE, parent)
         self._config = config
         self._files: list[intake.SourceFile] = []
 
-        self._empty = QLabel(
-            "还没有收到文件。\n\n"
-            "顾客在微信里发过来的文件会自动出现在这里。\n"
-            "如果发来的是聊天里的图片，请在微信里右键点图片、选「复制」，\n"
-            "再回到这里点下面的「粘贴图片」。"
-        )
+        self._empty = QLabel(texts.WORKSPACE_EMPTY)
         self._empty.setProperty("role", "hint")
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setWordWrap(True)
@@ -139,37 +136,46 @@ class InboxPage(SubPage):
         refresh.clicked.connect(self.reload)
         paste = QPushButton(texts.BTN_PASTE_IMAGE)
         paste.clicked.connect(self.pasteRequested.emit)
-        open_inbox = QPushButton("打开「待打印」文件夹")
-        open_inbox.clicked.connect(lambda: open_in_explorer(paths.INBOX_DIR))
+        open_workspace = QPushButton(texts.WORKSPACE_OPEN_FOLDER)
+        open_workspace.clicked.connect(self._open_workspace)
 
         bar = QHBoxLayout()
         bar.setSpacing(14)
         bar.addWidget(refresh)
         bar.addWidget(paste)
-        bar.addWidget(open_inbox)
+        bar.addWidget(open_workspace)
         bar.addStretch(1)
 
         self.body.addLayout(bar)
         self.body.addWidget(scroll, stretch=1)
 
-    def reload(self) -> None:
-        """重新扫一遍监控目录。
+    def _open_workspace(self) -> None:
+        open_in_explorer(config_mod.workspace_dir(self._config.intake))
+
+    def reload(self, note: str = "") -> None:
+        """重新扫一遍监控目录。`note` 是扫完之后要显示的一句话。
 
         扫描放到工作线程：微信目录可能有上万个文件，`rglob` 在界面线程里跑
         会让窗口卡住几秒（Windows 这时画的是定格的旧画面，看着像"卡死变形"）。
+
+        `note` 必须等扫完再显示：刚拖进来的文件要先出现在列表里，
+        提示语才对得上；提前显示会被扫描结束时的 `clear_status()` 抹掉。
         """
         self.show_busy("正在看有没有新文件…")
         run_async(
             intake.scan,
             intake.watch_dirs(self._config.intake),
             self._config.intake.recent_days,
-            on_done=self._on_scanned,
+            on_done=lambda files, n=note: self._on_scanned(files, n),
             on_failed=self.show_error,
         )
 
-    def _on_scanned(self, files: list[intake.SourceFile]) -> None:
-        self.clear_status()
+    def _on_scanned(self, files: list[intake.SourceFile], note: str = "") -> None:
         self.set_files(files)
+        if note:
+            self.show_done(note)
+        else:
+            self.clear_status()
 
     def _show_empty(self) -> None:
         """空状态上下都留白，让说明文字落在视线正中，而不是缩在页面顶上。"""

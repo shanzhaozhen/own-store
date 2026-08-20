@@ -23,7 +23,7 @@ def test_没有配置文件时用默认值() -> None:
     assert cfg.printing.paper == "A4"
     assert cfg.printing.copies == 1
     assert cfg.enhance.strength == 50
-    assert cfg.intake.watch_inbox is True
+    assert cfg.intake.watch_workspace is True
 
 
 def test_存了再读回来是同一份() -> None:
@@ -109,3 +109,55 @@ def test_保存失败只返回False不抛() -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.joinpath("config.json").mkdir(exist_ok=True)  # 用目录顶住文件名
     assert config_mod.save(config_mod.AppConfig()) is False
+
+
+# ── 可配置的两个目录：工作区、保存位置 ─────────────────────────────
+def test_没配就用默认目录(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(paths, "WORKSPACE_DIR", tmp_path / "默认工作区")
+    cfg = config_mod.AppConfig()
+    assert config_mod.workspace_dir(cfg.intake) == tmp_path / "默认工作区"
+    assert config_mod.save_dir(cfg.output) == paths.output_dir()
+
+
+def test_配了就用配的_而且顺手建出来(tmp_path) -> None:
+    cfg = config_mod.AppConfig()
+    cfg.intake.workspace_dir = str(tmp_path / "店里的活儿")
+    cfg.output.dir = str(tmp_path / "存这里")
+    工作区 = config_mod.workspace_dir(cfg.intake)
+    保存 = config_mod.save_dir(cfg.output)
+    assert (工作区, 保存) == (tmp_path / "店里的活儿", tmp_path / "存这里")
+    assert 工作区.is_dir() and 保存.is_dir()  # 不能等到保存文件时才发现目录不存在
+
+
+def test_配的目录用不了就退回默认(monkeypatch, tmp_path) -> None:
+    """店主可能把路径填成 U 盘上的目录，盘一拔工具还得能用。"""
+    占位 = tmp_path / "这是个文件"
+    占位.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(paths, "WORKSPACE_DIR", tmp_path / "默认工作区")
+    cfg = config_mod.AppConfig()
+    cfg.intake.workspace_dir = str(占位 / "建不出来")  # 父级是文件，mkdir 必失败
+    assert config_mod.workspace_dir(cfg.intake) == tmp_path / "默认工作区"
+
+
+def test_另存为对话框优先开在上次去过的文件夹(tmp_path) -> None:
+    cfg = config_mod.AppConfig()
+    cfg.output.dir = str(tmp_path / "默认保存")
+    assert config_mod.dialog_dir(cfg.output) == tmp_path / "默认保存"
+    上次 = tmp_path / "上次存的地方"
+    上次.mkdir()
+    cfg.output.last_save_dir = str(上次)
+    assert config_mod.dialog_dir(cfg.output) == 上次
+    cfg.output.last_save_dir = str(tmp_path / "已经被删掉了")
+    assert config_mod.dialog_dir(cfg.output) == tmp_path / "默认保存"
+
+
+def test_两个目录设置存得下来也读得回来(tmp_path) -> None:
+    cfg = config_mod.load()
+    cfg.intake.workspace_dir = "D:/打印/今天的活儿"
+    cfg.output.dir = "D:/打印/存好的"
+    cfg.output.last_save_dir = "D:/打印/存好的/子文件夹"
+    assert config_mod.save(cfg) is True
+    again = config_mod.load()
+    assert again.intake.workspace_dir == "D:/打印/今天的活儿"
+    assert again.output.dir == "D:/打印/存好的"
+    assert again.output.last_save_dir == "D:/打印/存好的/子文件夹"

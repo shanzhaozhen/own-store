@@ -12,9 +12,10 @@ from pathlib import Path
 
 APP_DIR_NAME = "ShopPrint"
 
-# 面向长辈的"投递箱"：微信里另存为到这里，工具首页立刻出现。
+# 工作区：店里放待打印文件的那个文件夹。微信里"另存为"到这里，工具首页立刻出现。
 # 安装脚本会创建它并在桌面放快捷方式。用中文路径是有意的 —— 长辈要能看懂。
-INBOX_DIR = Path("C:/打印/待打印")
+# **这只是默认值**，设置里能改（见 config.workspace_dir）。
+WORKSPACE_DIR = Path("C:/打印/待打印")
 
 
 def _local_app_data() -> Path:
@@ -48,7 +49,10 @@ def log_dir() -> Path:
 
 
 def output_dir() -> Path:
-    """给用户的产出：OCR 生成的 docx/txt、另存的增强图片。"""
+    """给用户的产出的**默认**位置：OCR 生成的 docx/txt、另存的增强图片、证件 PDF。
+
+    设置里能改到别处（见 `config.save_dir`）—— 这个路径长辈自己找不到。
+    """
     return data_dir() / "output"
 
 
@@ -100,10 +104,13 @@ def ensure_runtime_dirs() -> bool:
     return ok
 
 
-def ensure_inbox_dir() -> bool:
-    """建"待打印"文件夹。失败不该拦住启动（比如 C 盘没权限），所以返回布尔而不抛。"""
+def ensure_workspace_dir() -> bool:
+    """建默认的工作区文件夹。失败不该拦住启动（比如 C 盘没权限），所以返回布尔而不抛。
+
+    设置里改过路径的话，实际用的目录由 `config.workspace_dir()` 负责创建。
+    """
     try:
-        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
     except OSError:
         return False
     return True

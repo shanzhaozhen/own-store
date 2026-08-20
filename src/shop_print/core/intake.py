@@ -2,7 +2,7 @@
 
 四条路，**长辈只需要会一条**（见 docs/01-环境与设备.md）：
 
-1. 待打印文件夹 `C:\\打印\\待打印` —— 微信里"另存为"到这里
+1. 工作区文件夹（默认 `C:\\打印\\待打印`，设置里能改）—— 微信里"另存为"到这里
 2. 微信接收目录 —— 以`文件`形式发来的会自动出现
 3. 剪贴板 —— 微信里右键"复制"图片，回来点「粘贴图片」（对长辈最省事）
 4. 拖拽 —— 直接把文件拖进窗口（UI 层处理）
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -24,6 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .. import config as config_mod
 from .. import paths
 from ..config import IntakeConfig
 from . import convert
@@ -120,18 +122,18 @@ def detect_wechat_dirs() -> list[Path]:
 
 
 def watch_dirs(config: IntakeConfig) -> list[Path]:
-    """最终要监控的目录列表。配置里手填的优先，没填才自动探测。"""
+    """最终要监控的目录列表。工作区排最前面，长辈最常用。"""
     dirs: list[Path] = []
-    if config.watch_inbox:
-        paths.ensure_inbox_dir()
-        if paths.INBOX_DIR.is_dir():
-            dirs.append(paths.INBOX_DIR)
+    if config.watch_workspace:
+        workspace = config_mod.workspace_dir(config)
+        if workspace.is_dir():
+            dirs.append(workspace)
     if config.watch_wechat:
         if config.wechat_dirs:
             dirs.extend(Path(d) for d in config.wechat_dirs if Path(d).is_dir())
         else:
             dirs.extend(detect_wechat_dirs())
-    # 去重但保持顺序：待打印目录要排在最前面，长辈最常用
+    # 去重但保持顺序：工作区要排在最前面，长辈最常用
     seen: set[str] = set()
     unique: list[Path] = []
     for directory in dirs:
@@ -328,12 +330,76 @@ def accept_dropped(items: Iterable[str | Path]) -> tuple[list[SourceFile], list[
     return accepted, rejected
 
 
-def save_incoming_image(image: np.ndarray, stem: str = "粘贴的图片") -> Path:
-    """把剪贴板/拖进来的图片存到待打印目录，后续流程和普通文件一样。"""
+def copy_into_workspace(sources: Iterable[Path], workspace: Path) -> list[Path]:
+    """把拖进来 / 粘贴过来的文件拷进工作区，返回拷好的路径（顺序不变）。
+
+    为什么要拷：工作区页面列的是"工作区里有什么"，文件还躺在桌面或者 U 盘上的话，
+    列表里根本看不到它，长辈就以为拖丢了。拷过来之后这些文件也留在工作区里，
+    第二天还能找到（这就是"历史工作区"）。
+
+    同名不覆盖：后面加 `-2`、`-3`。已经在工作区里的文件原地不动，不复制一份。
+    """
+    workspace = Path(workspace)
+    try:
+        workspace.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("工作区建不出来，文件留在原处：%s", workspace, exc_info=True)
+        return [Path(s) for s in sources]
+
+    copied: list[Path] = []
+    for raw in sources:
+        source = Path(raw)
+        if not source.is_file():
+            continue
+        if _same_dir(source.parent, workspace):
+            copied.append(source)  # 本来就在工作区里
+            continue
+        target = _free_name(workspace / source.name)
+        try:
+            shutil.copy2(source, target)
+        except OSError:
+            logger.exception("拷进工作区失败：%s", source)
+            copied.append(source)  # 拷不过去就用原路径，别把文件丢了
+            continue
+        copied.append(target)
+    return copied
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return a.resolve() == b.resolve()
+    except OSError:
+        return str(a).lower() == str(b).lower()
+
+
+def _free_name(target: Path) -> Path:
+    """同名文件已经在了就加 -2、-3…… 不覆盖顾客的文件。"""
+    if not target.exists():
+        return target
+    for index in range(2, 100):
+        candidate = target.with_name(f"{target.stem}-{index}{target.suffix}")
+        if not candidate.exists():
+            return candidate
+    return target.with_name(f"{target.stem}-{time.strftime('%H%M%S')}{target.suffix}")
+
+
+def save_incoming_image(
+    image: np.ndarray, stem: str = "粘贴的图片", target_dir: Path | None = None
+) -> Path:
+    """把剪贴板/拖进来的图片存到工作区，后续流程和普通文件一样。
+
+    没给目录就用默认工作区；连它也建不出来（C 盘没权限之类）就退到输出目录 ——
+    图片先落盘比"报错让长辈重新复制一次"要好。
+    """
     from .enhance import save_image
 
-    target_dir = paths.INBOX_DIR if paths.ensure_inbox_dir() else paths.output_dir()
-    target_dir.mkdir(parents=True, exist_ok=True)
+    if target_dir is None:
+        target_dir = paths.WORKSPACE_DIR if paths.ensure_workspace_dir() else paths.output_dir()
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        target_dir = paths.output_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     path = target_dir / f"{stem}-{stamp}.png"
     save_image(image, path)

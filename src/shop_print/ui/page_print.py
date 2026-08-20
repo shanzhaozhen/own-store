@@ -61,6 +61,15 @@ class PrintPage(SubPage):
         self._paper = ChoiceGroup([("A4", "A4"), ("A3", "A3")], config.printing.paper)
         self._paper.changed.connect(lambda _: self._refresh_preview())
 
+        # 「大小」：等比缩放。100 = 刚好铺满可打印区（永远不超边），
+        # 用户反馈"直接打印会超出 A4 边缘"，调小一点就能留出白边。
+        # 证件那条路（actual_size）不给调 —— 那必须 1:1。
+        self._zoom = NumberStepper(60, 130, config.printing.zoom, step=5, suffix="%")
+        self._zoom.valueChanged.connect(self._on_zoom_changed)
+        self._zoom_hint = QLabel(texts.PRINT_ZOOM_HINT)
+        self._zoom_hint.setProperty("role", "hint")
+        self._zoom_hint.setWordWrap(True)
+
         self._margin_hint = QLabel("")
         self._margin_hint.setProperty("role", "hint")
         self._margin_hint.setWordWrap(True)
@@ -83,6 +92,9 @@ class PrintPage(SubPage):
         controls.addLayout(self._row(texts.LABEL_COPIES, self._copies))
         controls.addLayout(self._row(texts.LABEL_SIDES, self._sides))
         controls.addLayout(self._row(texts.LABEL_PAPER, self._paper))
+        self._zoom_row = self._row(texts.LABEL_PRINT_ZOOM, self._zoom)
+        controls.addLayout(self._zoom_row)
+        controls.addWidget(self._zoom_hint)
         controls.addWidget(self._color_hint)
         controls.addWidget(self._margin_hint)
         controls.addWidget(self._size_hint)
@@ -150,8 +162,19 @@ class PrintPage(SubPage):
             paper=self._paper.current(),
             dpi=self._config.printing.dpi,
             actual_size=self._actual_size,
+            zoom=self._zoom.value() / 100.0,
             job_name=job_name,
         )
+
+    def _on_zoom_changed(self, percent: int) -> None:
+        self._config.printing.zoom = percent
+        self._refresh_preview()
+
+    def _sync_zoom_visible(self) -> None:
+        """按实物尺寸打的时候不给调大小 —— 缩了证件复印件就作废了。"""
+        可调 = not self._actual_size
+        self._zoom.setEnabled(可调)
+        self._zoom_hint.setVisible(可调)
 
     # ── 外部入口 ────────────────────────────────────────────────
     def load(
@@ -177,6 +200,7 @@ class PrintPage(SubPage):
         self._preview.set_total(0)
         self.reload_printers()
         self._size_hint.setVisible(actual_size)
+        self._sync_zoom_visible()
 
         if not self._sources:
             self._file_label.setText("")

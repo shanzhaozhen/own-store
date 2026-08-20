@@ -50,6 +50,14 @@ QPushButton[role="primary"] {
     font-size: 24pt;
     font-weight: bold;
 }
+/* 证件页的主按钮矮一档：那一行还有「保存成 PDF / 另存为…」两个白按钮，
+   高度不一样看着像没做完。**这里写 60 而白按钮写 56 是对的** ——
+   白按钮有 2px 边框，min-height 管的是内容区，加上上下边框正好也是 60px。 */
+QPushButton[role="primary"][compact="true"] {
+    min-height: 60px;
+    max-height: 60px;
+    font-size: 21pt;
+}
 QPushButton[role="primary"]:hover   { background: #168733; }
 QPushButton[role="primary"]:pressed { background: #12712b; }
 QPushButton[role="primary"]:disabled { background: #b7c3ce; color: #eef1f4; }
@@ -79,11 +87,13 @@ QPushButton[role="stepper"] {
     padding: 0;
 }
 
-/* 二选一 / 多选一的大按钮组，代替下拉框 */
+/* 二选一 / 多选一的大按钮组，代替下拉框。
+   padding 给得紧一点：证件页要在一行里排六个（身份证/银行卡/…/自动认），
+   1024 宽的小屏上按钮一胖，整列的最小宽度就把 A4 预览挤没了。 */
 QPushButton[role="choice"] {
-    min-height: 52px;
-    max-height: 52px;
-    padding: 0 18px;
+    min-height: 48px;
+    max-height: 48px;
+    padding: 0 12px;
     font-size: 17pt;
 }
 QPushButton[role="choice"]:checked {
@@ -93,13 +103,48 @@ QPushButton[role="choice"]:checked {
 }
 QPushButton[role="choice"]:checked:hover { background: #0d6ae8; }
 
-/* 证件页那两行「选图片 / 粘贴」：比普通按钮矮一点，好让 A4 预览多占地方。
-   仍然满足硬性要求：可点高度 ≥44px、文字 ≥18pt。 */
-QPushButton[role="slot"] {
-    min-height: 52px;
-    max-height: 52px;
-    padding: 0 16px;
+/* 图片框里的小按钮（转一下 / 去掉 / 粘贴）。压到 44px —— 正好是可点区域的
+   下限，再矮就违规了。这一页控件多，每省 8px 都是给 A4 预览的。 */
+QPushButton[role="mini"] {
+    min-height: 44px;
+    max-height: 44px;
+    padding: 0 12px;
     font-size: 18pt;
+}
+
+/* 页面上那块"把图片放这里"的空地：虚线框 + 一句大字。
+   和证件页的图片框同一套视觉语言（虚线 = 这里能放东西）。 */
+QFrame[role="dropzone"] {
+    background: #ffffff;
+    border: 2px dashed #b9c3cf;
+    border-radius: 14px;
+}
+QFrame[role="dropzone"]:hover { border-color: #1677ff; background: #f7fbff; }
+QLabel[role="dropzone-text"] { font-size: 19pt; color: #3d4652; background: transparent; }
+
+/* 只用来接点击和拖拽的透明外壳（照片页的左右对比、OCR 页的原图外面套一层） */
+QFrame[role="plain"] { background: transparent; border: none; }
+
+/* 证件页的两个图片框：空的时候虚线框 +「点这里选图片」，放好之后实线框 + 缩略图。
+   虚线是"这里能放东西"的通用暗示，长辈也认得。 */
+QFrame[role="cardslot"] {
+    background: #ffffff;
+    border: 2px dashed #b9c3cf;
+    border-radius: 14px;
+}
+QFrame[role="cardslot"]:hover { border-color: #1677ff; background: #f7fbff; }
+QFrame[role="cardslot"][filled="true"] { border: 2px solid #dfe5ec; }
+QFrame[role="cardslot"] QLabel { background: transparent; }
+
+/* 框里的缩略图：不要再套一层灰底的框，不然框中框看着很乱 */
+QFrame[role="cardslot"] QFrame[role="thumb"] {
+    background: transparent;
+    border: none;
+}
+/* 空框里那句「点这里选图片」是这一格的主行动，比普通提示大一号、颜色也深一些 */
+QFrame[role="cardslot"] QFrame[role="thumb"] QLabel {
+    font-size: 17pt;
+    color: #3d4652;
 }
 
 /* 卡片和预览框里的文字必须透明背景：上面那条 QWidget 规则会给每个 QLabel
